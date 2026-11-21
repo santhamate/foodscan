@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoodScan rögzítő</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* VOICE: calm measuring instrument, terse Hungarian labels.
+   IDEA: a surveyor's theodolite — the camera stage is the eyepiece, the coverage dial is the horizontal circle.
+   PICTURE: live frame with AR overlay + polar coverage dial + orbitable 3D camera rig.
+   COLOUR and TYPE: aluminium #e9eaec, black ink, orange #ff4f00 pointer; night #141517. Geist 500/400, Geist Mono for readouts.
+   LAYOUT: stage left (largest), dial + readouts right; keyframes and 3D rig below; stacks on phones. */
+:root{color-scheme:light dark;--bg:light-dark(#e9eaec,#141517);--panel:light-dark(#f6f6f7,#1d1e21);--ink:light-dark(#0d0d0e,#ececee);--mut:light-dark(#5d6067,#9a9da5);--line:light-dark(#c9cbd0,#33353b);--acc:#ff4f00;--ok:light-dark(#0b7a3e,#43c27a);--stage:#0b0b0c}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Geist,system-ui,sans-serif;overflow-x:clip}
+.band{padding:clamp(16px,3vw,32px) max(4vw,14px);max-width:1240px;margin:0 auto}
+h1{font-size:clamp(26px,4vw,36px);line-height:1.05;margin:0 0 4px;font-weight:600;text-wrap:balance}
+h2{font-size:18px;margin:0 0 10px;font-weight:600}
+.sub{color:var(--mut);margin:0;max-width:70ch}
+.grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;margin-top:18px}
+@media(max-width:820px){.grid{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;max-height:74vh;margin:0 auto;background:var(--stage);border-radius:14px;overflow:hidden;aspect-ratio:4/3;display:grid;place-items:center}
+.stage canvas{width:100%;height:100%;object-fit:contain;display:block}
+.chip{position:absolute;left:10px;top:10px;background:rgba(0,0,0,.62);color:#fff;font:500 13px/1.3 'Geist Mono',monospace;padding:6px 10px;border-radius:8px;max-width:calc(100% - 20px)}
+.chip.ok{box-shadow:inset 3px 0 0 #43c27a}.chip.warn{box-shadow:inset 3px 0 0 var(--acc)}
+.empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#cfd1d6;padding:24px;font-size:15px}
+.empty b{display:block;color:#fff;font-size:18px;margin-bottom:6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.dialwrap{position:relative;aspect-ratio:1;max-width:340px;margin:0 auto}
+.dialwrap canvas{position:absolute;inset:0;width:100%;height:100%}
+.prog{height:10px;border-radius:5px;background:var(--line);overflow:hidden;margin:12px 0 6px}
+.prog i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+.prog.done i{background:var(--ok)}
+.read{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;margin-top:10px;font-size:14px}
+.read div{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+.read span{color:var(--mut)}
+@media(max-width:520px){.read{grid-template-columns:minmax(0,1fr)}}.read b{font:500 14px 'Geist Mono',monospace;white-space:nowrap}
+.checks{list-style:none;padding:0;margin:10px 0 0;font-size:14px}
+.checks li{padding:3px 0;color:var(--mut)}.checks li.y{color:var(--ink)}
+.checks li::before{content:'○ ';color:var(--mut)}.checks li.y::before{content:'● ';color:var(--ok)}
+.controls{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;align-items:center}
+.btn{appearance:none;border:1px solid var(--ink);background:transparent;color:var(--ink);font:500 15px Geist,sans-serif;min-height:44px;padding:0 16px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+label.btn input{display:none}
+.field{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--mut)}
+.field input{width:84px;min-height:44px;font:16px 'Geist Mono',monospace;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.note{font-size:13px;color:var(--mut);margin:10px 0 0;max-width:80ch}
+.kfs{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px}
+.kf{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel);cursor:pointer;padding:0;text-align:left;color:var(--ink);font:inherit}
+.kf img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#000}
+.kf small{display:block;padding:5px 7px;font:12px/1.35 'Geist Mono',monospace;color:var(--mut)}
+.kf.sel{outline:3px solid var(--acc)}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px}
+@media(max-width:820px){.two{grid-template-columns:minmax(0,1fr)}}
+.fig{position:relative;min-height:320px;border-radius:14px;background:var(--panel);border:1px solid var(--line);touch-action:none}
+.fig>canvas{position:absolute;inset:0;width:100%;height:100%}
+.figcap{position:absolute;left:12px;bottom:10px;font-size:13px;color:var(--mut);pointer-events:none}
+.busy{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(0,0,0,.7);color:#fff;border-radius:8px;padding:8px 10px;font-size:14px;display:none;gap:10px;align-items:center}
+.busy .prog{flex:1;margin:0}.busy button{min-height:36px;color:#fff;border-color:#fff}
+.ana{margin-top:16px}
+.steps{margin:0 0 10px;padding-left:20px;font-size:15px}.steps li{margin:3px 0;color:var(--mut)}.steps li.on{color:var(--ink)}.steps li.done{color:var(--ok)}
+.status{font:500 14px 'Geist Mono',monospace;margin:6px 0 12px}
+.anaGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:20px}
+@media(max-width:820px){.anaGrid{grid-template-columns:minmax(0,1fr)}}
+.big{display:flex;flex-direction:column;gap:2px;margin:6px 0 8px}.big span{color:var(--mut);font-size:14px}
+.big b{font:600 clamp(30px,5vw,44px)/1.05 Geist,sans-serif;font-variant-numeric:tabular-nums}.big small{color:var(--mut);font-size:13px}
+.sel{min-height:44px;font:16px Geist,sans-serif;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:0 10px;max-width:100%}
+.nut{width:100%;border-collapse:collapse;font-size:15px;margin-top:6px}.nut th,.nut td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right}
+.nut th:first-child,.nut td:first-child{text-align:left}.nut td{font-family:'Geist Mono',monospace;white-space:nowrap}.nut tr.key td{font-weight:600;color:var(--acc)}
+.stage.tap{cursor:crosshair}
+@media(prefers-reduced-motion:reduce){.prog i{transition:none}}
+</style>
+</head>
+<body>
+<div class="band">
+  <h1>FoodScan · rögzítő</h1>
+  <p class="sub">Tedd a markerkártyát a tányér mellé, és vegyél fel egy rövid, lassú ívet az étel körül. Az app minden képkockán kiszámolja a kamera helyzetét a kártyához képest, és magától kiválogatja az éles, új szögből készült kulcskockákat.</p>
+
+  <div class="grid">
+    <div>
+      <div class="stage" id="stage">
+        <canvas id="view" width="1280" height="960"></canvas>
+        <div class="empty" id="empty"><div><b>Még nincs kép</b>Vedd fel a videót a telefon Kamera appjával (5–15 mp, lassú ív), majd töltsd fel a „Videó a galériából” gombbal — így marad meg a teljes felbontás.</div></div>
+        <div class="chip" id="chip" hidden></div>
+        <div class="busy" id="busy"><span id="busyTxt">Feldolgozás…</span><div class="prog"><i id="busyBar"></i></div><button class="btn" id="cancel" type="button">Mégse</button></div>
+      </div>
+      <div class="controls">
+        <button class="btn" id="live" type="button">Élő kamera</button>
+        <label class="btn pri" id="vidLbl">Videó a galériából<input id="vid" type="file" accept="video/*,.mov,.mp4,.m4v,video/quicktime,video/mp4"></label>
+        <label class="btn">Videó felvétele<input id="vidCap" type="file" accept="video/*" capture="environment"></label>
+        <label class="btn">Fotók<input id="pics" type="file" accept="image/*" multiple></label>
+        <label class="field" style="gap:6px"><select id="planSel" class="sel" aria-label="Felvételi terv"><option value="quick">Gyors ív (~150°)</option><option value="full">Teljes kör / forgatótányér</option></select></label>
+        <label class="btn">ZIP betöltése<input id="zipIn" type="file" accept=".zip,application/zip"></label>
+        <button class="btn" id="reset" type="button">Új mérés</button>
+      </div>
+      <p class="note" id="camNote"></p>
+    </div>
+
+    <div class="panel">
+      <h2>Lefedettség</h2>
+      <div class="dialwrap"><canvas id="dial"></canvas></div>
+      <div class="prog" id="qprog"><i id="qbar"></i></div>
+      <div id="qtxt" style="font-size:14px">Gyors mód: 0%</div>
+      <ul class="checks" id="checks"></ul>
+      <div class="read">
+        <div><span>Kulcskocka</span><b id="rK">0</b></div>
+        <div><span>Ív</span><b id="rSpan">0°</b></div>
+        <div><span>Fókusz</span><b id="rF">–</b></div>
+        <div><span>Forrás</span><b id="rFs">alapérték</b></div>
+        <div><span>Távolság</span><b id="rD">–</b></div>
+        <div><span>Reproj. hiba</span><b id="rE">–</b></div>
+      </div>
+      <div class="controls">
+        <div class="field">Kártya 50 mm-es vonala <input id="scale" type="number" step="0.1" min="40" max="60" value="50.0" inputmode="decimal"> mm</div>
+      </div>
+      <div class="controls">
+        <button class="btn pri" id="export" type="button" disabled>Export (ZIP)</button>
+        <button class="btn" id="copy" type="button" disabled>JSON másolása</button>
+      </div>
+      <p class="note" id="expNote"></p>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="fig" id="rigFig"><canvas id="rig"></canvas><div class="figcap">Kamerapozíciók a kártyához képest — húzd a forgatáshoz</div></div>
+    <div class="panel">
+      <h2>Kulcskockák</h2>
+      <div class="kfs" id="kfs"><p class="note" style="margin:0">A kiválasztott kockák itt jelennek meg. Koppints egyre, hogy a színpadon ellenőrizd a visszavetített kártyakeretet.</p></div>
+    </div>
+  </div>
+  <section class="panel ana" id="ana">
+    <h2>Elemzés: étel → térfogat → tömeg → tápérték</h2>
+    <ol class="steps">
+      <li id="st1">Nyomd meg az <b>Automatikus elemzés</b> gombot. Az app megkeresi a kártya körül azt a tárgyat, ami minden nézetből kiemelkedik az asztal síkjából — az árnyék és a kártya lapos, ezért kiesik. Ha több tárgy is van, a kártyához legközelebbit veszi; ha mást szeretnél, koppints rá egy kulcskockán.</li>
+      <li id="st2">Minden kulcskockán kivágja az ételt, és a kamerapozíciókból kifaragja a térfogatát.</li>
+      <li id="st3">Claude felismeri az ételt (vagy válassz kézzel) → tömeg a sűrűségből → tápérték.</li>
+    </ol>
+    <div class="controls" style="margin:0 0 6px"><button class="btn pri" id="autoBtn" type="button" disabled>Automatikus elemzés</button></div>
+    <p class="note" style="margin-top:0">Más étel ne legyen a kártya 25 cm-es körzetében. Forgatós mód: tedd a kártyát a tányér lapos részére az étel mellé, és a tányérral együtt forgasd — a telefont két magasságban tartsd.</p>
+    <p id="anaStatus" class="status">Még nincs elemzés.</p>
+    <div class="anaGrid">
+      <div>
+        <div class="big"><span>Becsült térfogat</span><b id="aV">–</b><small id="aVr"></small></div>
+        <div class="read">
+          <div><span>Magasság</span><b id="aH">–</b></div>
+          <div><span>Talpfelület ⌀</span><b id="aD">–</b></div>
+          <div><span>Voxel</span><b id="aVx">–</b></div>
+          <div><span>Kockák</span><b id="aN">–</b></div>
+        </div>
+      </div>
+      <div>
+        <div class="controls" style="margin-top:0">
+          <select id="foodSel" class="sel" aria-label="Étel"></select>
+          <button class="btn pri" id="recog" type="button" disabled>Felismerés Claude-dal</button>
+        </div>
+        <p class="note" id="recogNote"></p>
+        <div class="big"><span>Tömeg</span><b id="aM">–</b><small id="aMr"></small></div>
+        <table class="nut" id="nut"><thead><tr><th>Tápanyag</th><th>100 g-ban</th><th>Adagban</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <p class="note">A térfogat „visual hull”: a sziluettekből faragott burok, ezért inkább felülbecsül (a homorú részeket és a takart hátoldalt nem látja). A sűrűség és a tápértékek tájékoztató adatok (USDA FoodData Central, kerekítve). Ha teheted, mérd meg konyhai mérleggel az ételt, és vesd össze — ebből tudjuk kalibrálni.</p>
+  </section>
+  <p class="note">Koordináták: a kártya közepe az origó, x jobbra, y a kártya teteje felé, z felfelé, mm-ben. Kamera: OpenCV-konvenció (x jobbra, y le, z előre), X<sub>kam</sub> = R·X<sub>kártya</sub> + t.</p>
+</div>
+
+<video id="vsrc" playsinline muted hidden></video>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="core.js"></script>
+<script src="foods.js"></script>
+<script src="analyze.js"></script>
+<script>
+{
+const $ = id => document.getElementById(id);
+const C = window.FoodCore;
+const DET_MAX = 1280, CAP_MAX = 2048, MIN_ANG = 7, MAX_KF = 48;
+let detector = null;
+try { detector = new AR.Detector({ dictionaryName: C.CARD.dict, maxHammingDistance: C.CARD.maxHamming }); } catch (e) { console.error(e); }
+
+const S = window.FoodScanState = { K: null, size: null, kfs: [], recentSharp: [], last: null, sel: -1, cancel: false, live: null, busy: false, fSrc: 'alapérték', mode: null, seq: 0, plan: 'quick', planBase: null, ref: null, res: null, shown: -1, food: null };
+const detC = document.createElement('canvas'), detX = detC.getContext('2d', { willReadFrequently: true });
+const capC = document.createElement('canvas'), capX = capC.getContext('2d');
+const view = $('view'), vx = view.getContext('2d');
+const cardScale = () => { const v = parseFloat($('scale').value); return v > 40 && v < 60 ? v / 50 : 1; };
+
+function defaultK(w, h) { return { f: 0.75 * Math.max(w, h), cx: w / 2, cy: h / 2 }; } // ~26 mm-equiv phone main camera
+function ensureSize(w, h, mode) {
+  if (!S.size || S.size[0] !== w || S.size[1] !== h || S.mode !== mode) { resetSession(); S.size = [w, h]; S.mode = mode; S.K = defaultK(w, h); S.fSrc = 'alapérték'; lowResNote(w, h); }
+}
+function resetSession() {
+  S.planBase = null; S.planStart = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
+  renderKfs(); updateStats(); drawDial(); drawRig();
+}
+
+function lowResNote(w, h) {
+  $('camNote').textContent = Math.max(w, h) < 1000 ? `Figyelem: a forrás csak ${w}×${h} px — így a markerek nagy része nem ismerhető fel, és a póz bizonytalanabb. iPhone-on a böngészőben felvett videót az iOS közepes minőségre veszi le; jobb, ha a Kamera appal veszed fel, és a „Fotók” / galéria felől töltöd fel, vagy fotókat használsz.` : '';
+}
+// ---------- frame processing
+function analyse(src, sw, sh) {
+  const s = Math.min(1, DET_MAX / Math.max(sw, sh)), dw = Math.round(sw * s), dh = Math.round(sh * s);
+  if (detC.width !== dw || detC.height !== dh) { detC.width = dw; detC.height = dh; }
+  detX.drawImage(src, 0, 0, dw, dh);
+  const img = detX.getImageData(0, 0, dw, dh);
+  const raw = detector ? detector.detect(img) : [];
+  const markers = raw.map(m => ({ id: m.id, hammingDistance: m.hammingDistance, corners: m.corners.map(c => ({ x: c.x / s, y: c.y / s })) }));
+  let pose = C.estimatePose(markers, S.K, cardScale());
+  if (pose && pose.alt && S.ref) { const dv = q => C.angleBetween(C.viewDir(q), C.viewDir(S.ref)); if (dv(pose.alt) < dv(pose)) pose = C.swapAlt(pose); }
+  if (pose && (pose.ambiguity >= 2 || !S.ref)) S.ref = pose;
+  let sharp = 0;
+  if (pose && detector) {
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    markers.forEach(m => m.corners.forEach(c => { x0 = Math.min(x0, c.x * s); x1 = Math.max(x1, c.x * s); y0 = Math.min(y0, c.y * s); y1 = Math.max(y1, c.y * s); }));
+    const g = detector.grey; sharp = C.sharpness(g.data, g.width, g.height, { x0, y0, x1, y1 });
+  }
+  return { markers, pose, sharp, s };
+}
+
+function considerKeyframe(src, sw, sh, a, mode) {
+  const p = a.pose; if (!p) return { ok: false, why: 'Nem látom a kártyát' };
+  if (p.nMarkers < 2) return { ok: false, why: 'Legalább 2 marker kell' };
+  if (p.rms * a.s > 1.5) return { ok: false, why: 'Bizonytalan póz' };
+  if (p.elev < 15) return { ok: false, why: 'Túl lapos szög — emeld meg' };
+  if (p.dist < 120 || p.dist > 1000 * cardScale()) return { ok: false, why: p.dist < 120 ? 'Túl közel' : 'Túl messze' };
+  S.recentSharp.push(a.sharp); if (S.recentSharp.length > 15) S.recentSharp.shift();
+  const med = S.recentSharp.slice().sort((x, y) => x - y)[S.recentSharp.length >> 1];
+  if (mode !== 'photo' && S.recentSharp.length >= 4 && a.sharp < 0.75 * med) return { ok: false, why: 'Bemozdult — lassabban' };
+  const d = C.viewDir(p); let ni = -1, na = 1e9;
+  S.kfs.forEach((k, i) => { const ang = C.angleBetween(d, C.viewDir(k.pose)); if (ang < na) { na = ang; ni = i; } });
+  const minAng = mode === 'photo' ? 2 : MIN_ANG;
+  if (na >= minAng && S.kfs.length < MAX_KF) { S.ref = p; addKf(src, sw, sh, a, -1); return { ok: true, why: 'Kulcskocka mentve' }; }
+  if (ni >= 0 && na < minAng && a.sharp > 1.25 * S.kfs[ni].sharp) { addKf(src, sw, sh, a, ni); return { ok: true, why: 'Élesebb kocka — csere' }; }
+  return { ok: false, why: S.kfs.length >= MAX_KF ? 'Megvan a maximum' : 'Ezt a szöget már láttam — menj tovább' };
+}
+
+function addKf(src, sw, sh, a, replaceIdx) {
+  const s = Math.min(1, CAP_MAX / Math.max(sw, sh)), cw = Math.round(sw * s), ch = Math.round(sh * s);
+  capC.width = cw; capC.height = ch; capX.drawImage(src, 0, 0, cw, ch);
+  const tC = document.createElement('canvas'); tC.width = 240; tC.height = Math.round(240 * ch / cw); tC.getContext('2d').drawImage(capC, 0, 0, tC.width, tC.height);
+  const kf = { seq: ++S.seq, markers: a.markers, pose: a.pose, sharp: a.sharp, capScale: s, w: cw, h: ch, blob: null, thumb: tC.toDataURL('image/jpeg', 0.7) };
+  capC.toBlob(b => { kf.blob = b; updateStats(); }, 'image/jpeg', 0.92);
+  if (replaceIdx >= 0) S.kfs[replaceIdx] = kf; else S.kfs.push(kf);
+  if (navigator.vibrate) try { navigator.vibrate(12); } catch (e) {}
+  maybeRefineFocal(); renderKfs();
+}
+
+function maybeRefineFocal() {
+  if (!S.size || !S.kfs.length) return;
+  const [w, h] = S.size;
+  const fc = S.kfs.length >= 5 ? C.focalConfident(S.kfs.map(k => k.pose.H), w / 2, h / 2) : null;
+  if (fc && fc.f > 0.45 * Math.max(w, h) && fc.f < 1.6 * Math.max(w, h)) { S.K = { f: fc.f, cx: w / 2, cy: h / 2 }; S.fSrc = `becsült (±${(fc.spread * 100).toFixed(0)}%)`; }
+  else { S.K = defaultK(w, h); S.fSrc = 'alapérték'; }
+  reposeAll();
+}
+// re-estimate every keyframe with current K and pick the consistent branch of the planar ambiguity
+function reposeAll() {
+  const order = S.kfs.map((k, i) => i).sort((a, b) => S.kfs[a].seq - S.kfs[b].seq);
+  const poses = order.map(i => C.estimatePose(S.kfs[i].markers, S.K, cardScale()) || S.kfs[i].pose);
+  C.resolveSequence(poses).forEach((p, j) => { S.kfs[order[j]].pose = p; });
+}
+
+// ---------- coverage metrics
+function coverage() {
+  const bins = new Array(24).fill(0); let top = false, low = false, mid = false;
+  const mark = az => { bins[Math.floor(((az % 360) + 360) % 360 / 15) % 24]++; };
+  // a continuous sweep covers the azimuths between consecutive keyframes (near the top, azimuth moves fast)
+  const bySeq = S.kfs.slice().sort((p, q) => p.seq - q.seq);
+  for (let i = 1; i < bySeq.length; i++) {
+    const A = bySeq[i - 1].pose, B = bySeq[i].pose;
+    if (C.angleBetween(C.viewDir(A), C.viewDir(B)) > 22) continue;
+    let d = ((B.azim - A.azim + 540) % 360) - 180;
+    for (let k = 0; k <= Math.abs(d); k += 5) mark(A.azim + Math.sign(d) * k);
+  }
+  S.kfs.forEach(k => { mark(k.pose.azim); if (k.pose.elev >= 65) top = true; if (k.pose.elev <= 45) low = true; if (k.pose.elev > 45 && k.pose.elev < 65) mid = true; });
+  // largest circular run of covered bins
+  let best = 0; if (bins.every(b => b)) best = 24; else for (let i = 0; i < 24; i++) { if (!bins[i]) continue; let n = 0; while (n < 24 && bins[(i + n) % 24]) n++; best = Math.max(best, n); }
+  const span = best * 15;
+  const n = S.kfs.length;
+  const parts = [Math.min(1, n / 8), Math.min(1, span / 105), top ? 1 : 0, low ? 1 : 0];
+  const q = parts.reduce((a, b) => a + b, 0) / parts.length;
+  return { bins, span, top, low, mid, n, q };
+}
+
+// ---------- drawing
+function fitCanvas(cv) { const r = cv.getBoundingClientRect(), d = Math.min(2, window.devicePixelRatio || 1); const W = Math.max(1, Math.round(r.width * d)), H = Math.max(1, Math.round(r.height * d)); if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; } return [W, H, d]; }
+const probe = document.createElement('i'); probe.style.display = 'none'; document.body.appendChild(probe);
+function css(v) { probe.style.color = `var(${v})`; return getComputedStyle(probe).color || '#888'; } // resolves light-dark()
+
+// ---------- live guidance: target views on a dome, arrow toward the nearest missing one
+function planTargets() {
+  const T = [];
+  if (S.plan === 'full') { for (let az = 0; az < 360; az += 30) for (const el of [35, 55]) T.push({ az, el }); T.push({ az: 0, el: 78 }); }
+  else { const b = S.planBase == null ? 0 : S.planBase; for (let k = -3; k <= 3; k++) for (const el of [35, 55]) T.push({ az: (b + 25 * k + 360) % 360, el }); T.push({ az: b, el: 78 }); }
+  return T;
+}
+const dirOf = (az, el) => { const a = az * Math.PI / 180, e = el * Math.PI / 180; return [Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e)]; };
+function guide(pose) {
+  // quick plan: lock the 150° arc in the direction the user starts walking
+  if (S.planStart == null) S.planStart = pose.azim;
+  if (S.plan === 'quick' && !S.planLocked) { const d0 = ((pose.azim - S.planStart + 540) % 360) - 180; S.planBase = Math.abs(d0) > 15 ? (S.planStart + Math.sign(d0) * 65 + 360) % 360 : S.planStart; if (Math.abs(d0) > 15) S.planLocked = true; }
+  if (S.planBase == null) S.planBase = pose.azim;
+  const T = planTargets(), cur = C.viewDir(pose);
+  T.forEach(t => { const d = dirOf(t.az, t.el); t.done = S.kfs.some(k => C.angleBetween(d, C.viewDir(k.pose)) < (t.el > 70 ? 18 : 13)); t.ang = C.angleBetween(d, cur); });
+  const open = T.filter(t => !t.done);
+  if (!open.length) return { T, done: true, text: 'Kész ✓ — minden nézet megvan, állítsd le' };
+  // prefer staying in the current height band, then the nearest
+  const nxt = open.reduce((a, b) => (a.ang + 0.4 * Math.abs(a.el - pose.elev)) <= (b.ang + 0.4 * Math.abs(b.el - pose.elev)) ? a : b);
+  const Ct = dirOf(nxt.az, nxt.el).map(x => x * pose.dist), D = [Ct[0] - pose.C[0], Ct[1] - pose.C[1], Ct[2] - pose.C[2]], R = pose.R;
+  const vx2 = R[0] * D[0] + R[1] * D[1] + R[2] * D[2], vy2 = R[3] * D[0] + R[4] * D[1] + R[5] * D[2]; // camera-frame motion (x right, y down)
+  let dAz = ((nxt.az - pose.azim + 540) % 360) - 180; const dEl = nxt.el - pose.elev, parts = [];
+  if (pose.dist < 220) parts.push('kicsit távolabb'); else if (pose.dist > 650) parts.push('gyere közelebb');
+  if (Math.abs(dAz) > 8 && nxt.el < 70) parts.push(dAz > 0 ? 'kerülj jobbra' : 'kerülj balra');
+  if (Math.abs(dEl) > 8) parts.push(dEl > 0 ? 'emeld feljebb' : 'engedd lejjebb');
+  let text = parts.length ? parts.join(', ') : 'tartsd így, lassan';
+  if (S.plan === 'full' && Math.abs(dAz) > 8 && nxt.el < 70) text += ` (vagy forgasd a tányért ${dAz > 0 ? '↻' : '↺'})`;
+  return { T, nxt, vx: vx2, vy: vy2, ang: nxt.ang, text: text[0].toUpperCase() + text.slice(1), left: open.length };
+}
+function drawGuide(pose) {
+  const g = guide(pose), W = view.width, H = view.height, u = Math.min(W, H) / 100;
+  // arrow from the centre toward where the phone should move
+  if (!g.done) {
+    const n = Math.hypot(g.vx, g.vy) || 1, len = Math.min(1, g.ang / 25) * 22 * u + 8 * u, ux = g.vx / n, uy = g.vy / n, cx = W / 2, cy = H / 2;
+    const tx = cx + ux * len, ty = cy + uy * len;
+    vx.save(); vx.lineCap = 'round'; vx.strokeStyle = 'rgba(0,0,0,.45)'; vx.lineWidth = 3.4 * u;
+    vx.beginPath(); vx.moveTo(cx, cy); vx.lineTo(tx, ty); vx.stroke();
+    vx.strokeStyle = '#ff4f00'; vx.fillStyle = '#ff4f00'; vx.lineWidth = 2.2 * u;
+    vx.beginPath(); vx.moveTo(cx, cy); vx.lineTo(tx, ty); vx.stroke();
+    vx.beginPath(); vx.moveTo(tx + ux * 4 * u, ty + uy * 4 * u); vx.lineTo(tx - uy * 3.4 * u, ty + ux * 3.4 * u); vx.lineTo(tx + uy * 3.4 * u, ty - ux * 3.4 * u); vx.closePath(); vx.fill();
+    vx.restore();
+  }
+  // mini dome map, bottom-right
+  const r = 15 * u, mx = W - r - 3 * u, my = H - r - 9 * u, rOf = el => r * (90 - el) / 90;
+  vx.save(); vx.fillStyle = 'rgba(0,0,0,.55)'; vx.beginPath(); vx.arc(mx, my, r + 1.5 * u, 0, 7); vx.fill();
+  vx.strokeStyle = 'rgba(255,255,255,.35)'; vx.lineWidth = .3 * u; [0, 45].forEach(el => { vx.beginPath(); vx.arc(mx, my, rOf(el), 0, 7); vx.stroke(); });
+  g.T.forEach(t => { const rr = rOf(t.el), a = t.az * Math.PI / 180, px = mx + rr * Math.cos(a), py = my - rr * Math.sin(a); vx.beginPath(); vx.arc(px, py, 1.5 * u, 0, 7); vx.fillStyle = t.done ? '#43c27a' : 'rgba(255,255,255,.55)'; vx.fill(); if (g.nxt === t) { vx.strokeStyle = '#ff4f00'; vx.lineWidth = .7 * u; vx.beginPath(); vx.arc(px, py, 2.8 * u, 0, 7); vx.stroke(); } });
+  { const rr = rOf(pose.elev), a = pose.azim * Math.PI / 180; vx.fillStyle = '#ff4f00'; vx.beginPath(); vx.arc(mx + rr * Math.cos(a), my - rr * Math.sin(a), 1.9 * u, 0, 7); vx.fill(); }
+  // instruction banner
+  vx.font = `600 ${4.2 * u}px Geist, system-ui, sans-serif`; vx.textAlign = 'center'; const tw = vx.measureText(g.text).width;
+  vx.fillStyle = g.done ? 'rgba(11,122,62,.9)' : 'rgba(0,0,0,.65)'; vx.fillRect(W / 2 - tw / 2 - 3 * u, H - 9 * u, tw + 6 * u, 7 * u);
+  vx.fillStyle = '#fff'; vx.fillText(g.text, W / 2, H - 4 * u);
+  vx.restore();
+  return g;
+}
+function drawStage(srcCanvas, a, msg, ok) {
+  $('empty').hidden = true;
+  if (view.width !== srcCanvas.width || view.height !== srcCanvas.height) { view.width = srcCanvas.width; view.height = srcCanvas.height; $('stage').style.aspectRatio = view.width + '/' + view.height; }
+  vx.drawImage(srcCanvas, 0, 0);
+  const s = view.width / S.size[0], lw = Math.max(2, view.width / 400);
+  vx.lineWidth = lw; vx.strokeStyle = '#ff4f00';
+  a.markers.forEach(m => { vx.beginPath(); m.corners.forEach((c, i) => i ? vx.lineTo(c.x * s, c.y * s) : vx.moveTo(c.x * s, c.y * s)); vx.closePath(); vx.stroke(); });
+  if (a.pose) {
+    const P = (X) => { const u = C.project(a.pose.R, a.pose.t, S.K, X); return [u[0] * s, u[1] * s]; };
+    const cs = cardScale(), hw = C.CARD.w / 2 * cs, hh = C.CARD.h / 2 * cs;
+    vx.strokeStyle = '#fff'; vx.setLineDash([lw * 3, lw * 2]); vx.beginPath();
+    [[-hw, -hh, 0], [hw, -hh, 0], [hw, hh, 0], [-hw, hh, 0]].forEach((X, i) => { const q = P(X); i ? vx.lineTo(...q) : vx.moveTo(...q); }); vx.closePath(); vx.stroke(); vx.setLineDash([]);
+    const o = P([0, 0, 0]);
+    [['#ff3b30', [40, 0, 0]], ['#34c759', [0, 40, 0]], ['#0a84ff', [0, 0, 40]]].forEach(([col, X]) => { const q = P(X); vx.strokeStyle = col; vx.lineWidth = lw * 1.6; vx.beginPath(); vx.moveTo(...o); vx.lineTo(...q); vx.stroke(); });
+    // after analysis: the food's measured footprint (circle) and height, drawn where the food is
+    if (S.res) {
+      const { ctr, rad } = S.res.footprint, hz = S.res.heightMm; vx.strokeStyle = 'rgba(255,255,255,.75)'; vx.lineWidth = lw * .8;
+      for (const z of [0, hz]) { vx.beginPath(); for (let i = 0; i <= 48; i++) { const a2 = 2 * Math.PI * i / 48, q = P([ctr[0] + rad * Math.cos(a2), ctr[1] + rad * Math.sin(a2), z]); i ? vx.lineTo(...q) : vx.moveTo(...q); } vx.stroke(); }
+    }
+  }
+  if (S.mode === 'live' && a.pose && a.pose.nMarkers >= 1) drawGuide(a.pose);
+  else if (S.mode === 'live') { vx.save(); const u = Math.min(view.width, view.height) / 100; vx.font = `600 ${4.2 * u}px Geist, sans-serif`; vx.textAlign = 'center'; vx.fillStyle = 'rgba(0,0,0,.65)'; vx.fillRect(0, view.height - 9 * u, view.width, 7 * u); vx.fillStyle = '#fff'; vx.fillText('Keresd a kártyát — legalább 2 marker látsszon', view.width / 2, view.height - 4 * u); vx.restore(); }
+  const chip = $('chip'); chip.hidden = false;
+  chip.className = 'chip ' + (ok ? 'ok' : 'warn');
+  chip.textContent = a.pose ? `${a.pose.nMarkers}/6 marker · ${(a.pose.dist / 10).toFixed(0)} cm · ${a.pose.elev.toFixed(0)}° · ${msg}` : msg;
+}
+
+function drawDial(cur) {
+  const cv = $('dial'); const [W, H, d] = fitCanvas(cv); const x = cv.getContext('2d');
+  x.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H / 2 - 8 * d, R = Math.min(W, H) / 2 - 36 * d;
+  const rOf = el => R * (90 - Math.max(0, Math.min(90, el))) / 90;
+  const cov = coverage();
+  // covered azimuth sectors (outer ring)
+  cov.bins.forEach((b, i) => { if (!b) return; x.beginPath(); x.strokeStyle = css('--acc'); x.globalAlpha = .9; x.lineWidth = 9 * d; const a0 = -(i * 15) * Math.PI / 180, a1 = -((i + 1) * 15) * Math.PI / 180; x.arc(cx, cy, R + 8 * d, a1 + .02, a0 - .02); x.stroke(); });
+  x.globalAlpha = 1;
+  // rings
+  x.strokeStyle = css('--line'); x.lineWidth = 1 * d; x.fillStyle = css('--mut'); x.font = `${12 * d}px Geist Mono, monospace`; x.textAlign = 'left';
+  [0, 30, 60].forEach(el => { x.beginPath(); x.arc(cx, cy, rOf(el), 0, Math.PI * 2); x.stroke(); });
+  for (let a = 0; a < 360; a += 45) { const t = a * Math.PI / 180; x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + R * Math.cos(t), cy - R * Math.sin(t)); x.stroke(); }
+  x.fillText('30°', cx + rOf(30) + 3 * d, cy - 3 * d); x.fillText('60°', cx + rOf(60) + 3 * d, cy - 3 * d);
+  // card glyph at centre (top view)
+  const cs = R / 260; x.fillStyle = css('--ink'); x.globalAlpha = .85; x.fillRect(cx - 42.8 * cs, cy - 27 * cs, 85.6 * cs, 54 * cs); x.globalAlpha = 1;
+  // keyframes
+  S.kfs.forEach((k, i) => { const r = rOf(k.pose.elev), t = k.pose.azim * Math.PI / 180; x.beginPath(); x.arc(cx + r * Math.cos(t), cy - r * Math.sin(t), (i === S.sel ? 7 : 5) * d, 0, Math.PI * 2); x.fillStyle = i === S.sel ? css('--acc') : css('--ok'); x.fill(); });
+  if (cur) { const r = rOf(cur.elev), t = cur.azim * Math.PI / 180, px = cx + r * Math.cos(t), py = cy - r * Math.sin(t); x.strokeStyle = css('--acc'); x.lineWidth = 2.5 * d; x.beginPath(); x.arc(px, py, 10 * d, 0, Math.PI * 2); x.stroke(); x.beginPath(); x.moveTo(px - 15 * d, py); x.lineTo(px + 15 * d, py); x.moveTo(px, py - 15 * d); x.lineTo(px, py + 15 * d); x.stroke(); }
+  x.fillStyle = css('--mut'); x.textAlign = 'center'; x.fillText('felülnézet = közép · gyűrű = magassági szög', cx, H - 4 * d);
+}
+
+const rigView = { yaw: -0.6, pitch: 0.75, zoom: 1 };
+function drawRig() {
+  const cv = $('rig'); const [W, H, d] = fitCanvas(cv); const x = cv.getContext('2d'); x.clearRect(0, 0, W, H);
+  const cy = Math.cos(rigView.yaw), sy = Math.sin(rigView.yaw), cp = Math.cos(rigView.pitch), sp = Math.sin(rigView.pitch);
+  const maxD = Math.max(400, ...S.kfs.map(k => k.pose.dist)) * 1.15, sc = Math.min(W, H) / (2 * maxD) * rigView.zoom * 1.2;
+  const pr = P => { const X = cy * P[0] - sy * P[1], Y = sy * P[0] + cy * P[1]; const Yv = cp * Y - sp * P[2], Z = sp * Y + cp * P[2]; const persp = 1 / (1 - Yv / (maxD * 4)); return [W / 2 + X * sc * persp, H * 0.62 - Z * sc * persp]; };
+  const line = (a, b) => { const p = pr(a), q = pr(b); x.beginPath(); x.moveTo(...p); x.lineTo(...q); x.stroke(); };
+  // table grid (5 cm)
+  x.strokeStyle = css('--line'); x.lineWidth = 1 * d;
+  const g = Math.ceil(maxD / 50) * 50; for (let v = -g; v <= g; v += 50) { line([v, -g, 0], [v, g, 0]); line([-g, v, 0], [g, v, 0]); }
+  // card
+  const cs = cardScale(), hw = C.CARD.w / 2 * cs, hh = C.CARD.h / 2 * cs; x.fillStyle = css('--ink'); x.beginPath(); [[-hw, -hh, 0], [hw, -hh, 0], [hw, hh, 0], [-hw, hh, 0]].forEach((P, i) => { const p = pr(P); i ? x.lineTo(...p) : x.moveTo(...p); }); x.closePath(); x.fill();
+  x.lineWidth = 2 * d; x.strokeStyle = '#ff3b30'; line([0, 0, 0], [60, 0, 0]); x.strokeStyle = '#34c759'; line([0, 0, 0], [0, 60, 0]); x.strokeStyle = '#0a84ff'; line([0, 0, 0], [0, 0, 60]);
+  if (S.res) { // carved food voxels, coloured by height
+    const P = S.res.points, step = Math.max(1, Math.floor(P.length / 3 / 6000)) * 3, zt = S.res.heightMm || 1;
+    for (let i = 0; i < P.length; i += step) { const q = pr([P[i], P[i + 1], P[i + 2]]); x.fillStyle = `hsl(${18 + 30 * P[i + 2] / zt},95%,${42 + 18 * P[i + 2] / zt}%)`; x.fillRect(q[0] - 1.2 * d, q[1] - 1.2 * d, 2.4 * d, 2.4 * d); }
+  }
+  // cameras: pyramid from centre C along camera axes (rows of R)
+  const cams = S.kfs.map((k, i) => ({ p: k.pose, sel: i === S.sel }));
+  if (S.last && S.last.pose && !S.last.isKf) cams.push({ p: S.last.pose, cur: true });
+  cams.forEach(c => {
+    const R = c.p.R, Cc = c.p.C, s = 28, ax = [R[0], R[1], R[2]], ay = [R[3], R[4], R[5]], az = [R[6], R[7], R[8]];
+    const corner = (u, v) => [0, 1, 2].map(j => Cc[j] + s * (az[j] * 1.2 + ax[j] * u + ay[j] * v * 0.75));
+    const cr = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+    x.strokeStyle = c.cur ? css('--acc') : c.sel ? css('--acc') : css('--ok'); x.lineWidth = (c.sel || c.cur ? 2.2 : 1.3) * d;
+    cr.forEach((q, i) => { line(Cc, q); line(q, cr[(i + 1) % 4]); });
+    if (c.cur || c.sel) { x.setLineDash([4 * d, 4 * d]); line(Cc, [0, 0, 0]); x.setLineDash([]); }
+  });
+  if (!S.kfs.length) { x.fillStyle = css('--mut'); x.font = `${14 * d}px Geist, sans-serif`; x.textAlign = 'center'; x.fillText('A kamerák itt jelennek meg a kártya fölött', W / 2, H * 0.3); }
+}
+{ // orbit interaction
+  const fig = $('rigFig'); let drag = null;
+  fig.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; fig.setPointerCapture(e.pointerId); });
+  fig.addEventListener('pointermove', e => { if (!drag) return; rigView.yaw += (e.clientX - drag[0]) * 0.01; rigView.pitch = Math.max(0.05, Math.min(1.5, rigView.pitch + (e.clientY - drag[1]) * 0.01)); drag = [e.clientX, e.clientY]; drawRig(); });
+  fig.addEventListener('pointerup', () => drag = null); fig.addEventListener('pointercancel', () => drag = null);
+  fig.addEventListener('wheel', e => { e.preventDefault(); rigView.zoom = Math.max(0.4, Math.min(4, rigView.zoom * (e.deltaY > 0 ? 0.9 : 1.1))); drawRig(); }, { passive: false });
+}
+
+function updateStats() {
+  $('autoBtn').disabled = S.kfs.length < 4 || S.busy || !!S.live;
+  const cov = coverage();
+  $('rK').textContent = cov.n; $('rSpan').textContent = cov.span + '°';
+  if (S.K && S.size) { const diag = Math.hypot(...S.size); $('rF').textContent = `${S.K.f.toFixed(0)} px ≈ ${(S.K.f / diag * 43.27).toFixed(0)} mm`; }
+  $('rFs').textContent = S.fSrc;
+  const lp = S.last && S.last.pose; $('rD').textContent = lp ? (lp.dist / 10).toFixed(1) + ' cm' : '–'; $('rE').textContent = lp ? (lp.rms * (S.last.s || 1)).toFixed(2) + ' px' : '–';
+  const q = Math.round(cov.q * 100); $('qbar').style.width = q + '%'; $('qprog').classList.toggle('done', q >= 100);
+  $('qtxt').textContent = q >= 100 ? 'Gyors mód: kész ✓ — mehet a feldolgozásra' : `Gyors mód: ${q}%`;
+  $('checks').innerHTML = [[cov.n >= 8, `Legalább 8 kulcskocka (${cov.n})`], [cov.span >= 105, `Legalább ~105°-os ív (${cov.span}°)`], [cov.low, 'Egy alacsonyabb nézet (≤ 45°)'], [cov.top, 'Egy felülnézet (≥ 65°)']].map(([y, t]) => `<li class="${y ? 'y' : ''}">${t}</li>`).join('');
+  const ready = S.kfs.length > 0 && S.kfs.every(k => k.blob);
+  $('export').disabled = !ready; $('copy').disabled = !S.kfs.length;
+}
+
+function renderKfs() {
+  const el = $('kfs');
+  if (!S.kfs.length) { el.innerHTML = '<p class="note" style="margin:0">A kiválasztott kockák itt jelennek meg. Koppints egyre, hogy a színpadon ellenőrizd a visszavetített kártyakeretet.</p>'; return; }
+  el.innerHTML = S.kfs.map((k, i) => `<button class="kf${i === S.sel ? ' sel' : ''}" data-i="${i}" type="button"><img alt="Kulcskocka ${i + 1}" src="${k.thumb}"><small>#${i + 1} ${k.pose.azim.toFixed(0)}° / ${k.pose.elev.toFixed(0)}°<br>${(k.pose.dist / 10).toFixed(0)} cm · ${k.pose.nMarkers} mk</small></button>`).join('');
+}
+$('kfs').addEventListener('click', async e => {
+  const b = e.target.closest('.kf'); if (!b || S.live) return;
+  showKf(+b.dataset.i).then(() => { try { $('stage').scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); } catch (e) {} });
+});
+async function showKf(i) {
+  const k = S.kfs[i]; if (!k) return; S.sel = i; S.shown = i; renderKfs(); drawDial(); drawRig();
+  if (!k.blob) return;
+  const bm = await createImageBitmap(k.blob);
+  const c = document.createElement('canvas'); c.width = Math.min(bm.width, DET_MAX); c.height = Math.round(bm.height * c.width / bm.width); const cx2 = c.getContext('2d'); cx2.drawImage(bm, 0, 0, c.width, c.height);
+  const m = S.res && S.res.masks[i];
+  if (m) { // tint the segmented food
+    const o = document.createElement('canvas'); o.width = m.w; o.height = m.h; const ox = o.getContext('2d'), id = ox.createImageData(m.w, m.h);
+    for (let j = 0; j < m.data.length; j++) if (m.data[j]) { const edge = !m.data[j - 1] || !m.data[j + 1] || !m.data[j - m.w] || !m.data[j + m.w]; id.data.set(edge ? [255, 79, 0, 255] : [255, 79, 0, 70], 4 * j); }
+    ox.putImageData(id, 0, 0); cx2.imageSmoothingEnabled = false; cx2.drawImage(o, 0, 0, c.width, c.height);
+  }
+  drawStage(c, { markers: k.markers, pose: k.pose }, `#${i + 1} · ${(k.pose.rms).toFixed(2)} px${S.res ? '' : ' · koppints az ételre'}`, true);
+  $('stage').classList.add('tap');
+}
+
+// ---------- one frame end-to-end
+function step(src, sw, sh, mode) {
+  ensureSize(sw, sh, mode);
+  const a = analyse(src, sw, sh);
+  const r = considerKeyframe(src, sw, sh, a, mode);
+  S.last = { pose: a.pose, s: a.s, isKf: r.ok };
+  if (mode === 'live' || r.ok || mode === 'photo') drawStage(detC, a, r.why, r.ok);
+  updateStats(); drawDial(a.pose); drawRig();
+  return r;
+}
+
+// ---------- sources
+const busy = (on, txt, frac) => { $('busy').style.display = on ? 'flex' : 'none'; if (txt) $('busyTxt').textContent = txt; if (frac != null) $('busyBar').style.width = Math.round(frac * 100) + '%'; };
+$('cancel').onclick = () => { S.cancel = true; };
+
+async function runVideo(file) {
+  stopLive(); S.cancel = false;
+  const v = $('vsrc'); const url = URL.createObjectURL(file); v.src = url;
+  try {
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error('A videót nem tudom megnyitni ebben a böngészőben.')); v.load(); });
+    v.muted = true; v.playsInline = true;
+    try { await v.play(); v.pause(); } catch (e) {}
+    const dur = v.duration; if (!isFinite(dur) || dur <= 0) throw new Error('Ismeretlen videóhossz.');
+    resetSession();
+    busy(true, 'Videó feldolgozása…', 0);
+    if (v.requestVideoFrameCallback) { await playThrough(v, dur); maybeRefineFocal(); renderKfs(); updateStats(); drawDial(); drawRig(); return; }
+    const dt = Math.max(1 / 10, dur / 150);
+    for (let t = 0.05; t < dur && !S.cancel; t += dt) {
+      await new Promise(res => { const to = setTimeout(res, 2500); v.onseeked = () => { clearTimeout(to); res(); }; v.currentTime = t; });
+      step(v, v.videoWidth, v.videoHeight, 'video');
+      busy(true, `Videó feldolgozása… ${S.kfs.length} kulcskocka`, t / dur);
+      await new Promise(r => setTimeout(r, 0));
+    }
+  } catch (e) { $('camNote').textContent = e.message; }
+  finally { busy(false); URL.revokeObjectURL(url); }
+}
+// Play the video slowly and analyse frames as they are presented (much faster and steadier than
+// seeking, especially for 4K/HEVC on iPhone). Frames that arrive while we are busy are skipped.
+function playThrough(v, dur) {
+  return new Promise(res => {
+    let lastT = -1, done = false, lastMedia = -1, lastMove = performance.now();
+    const finish = () => { if (done) return; done = true; clearInterval(wd); v.pause(); v.onended = null; res(); };
+    const onFrame = (now, meta) => {
+      if (done) return;
+      if (S.cancel) return finish();
+      const t = meta && meta.mediaTime != null ? meta.mediaTime : v.currentTime;
+      if (t - lastT >= 1 / 15 && v.videoWidth) {
+        lastT = t; step(v, v.videoWidth, v.videoHeight, 'video');
+        busy(true, `Videó feldolgozása… ${S.kfs.length} kulcskocka · ${t.toFixed(1)}/${dur.toFixed(1)} s`, t / dur);
+      }
+      if (v.ended) return finish();
+      v.requestVideoFrameCallback(onFrame);
+    };
+    v.onended = () => setTimeout(finish, 300);
+    // watchdog: nudge a stalled player, give up after 12 s without progress
+    const wd = setInterval(() => {
+      if (v.currentTime !== lastMedia) { lastMedia = v.currentTime; lastMove = performance.now(); return; }
+      const idle = performance.now() - lastMove;
+      if (idle > 3000) v.play().catch(() => {});
+      if (idle > 12000) { $('camNote').textContent = `A lejátszás megakadt ${v.currentTime.toFixed(1)} s-nál — az addigi kulcskockák megmaradtak.`; finish(); }
+    }, 1000);
+    v.playbackRate = Math.max(v.videoWidth, v.videoHeight) > 2000 ? 0.35 : 0.5;
+    v.requestVideoFrameCallback(onFrame);
+    try { v.currentTime = 0; } catch (e) {}
+    v.play().catch(e => { $('camNote').textContent = 'A videót nem tudom lejátszani: ' + (e && e.message || e); finish(); });
+  });
+}
+async function runPhotos(files) {
+  stopLive(); S.cancel = false; resetSession(); busy(true, 'Fotók feldolgozása…', 0);
+  let i = 0, miss = 0;
+  for (const f of files) {
+    if (S.cancel) break;
+    try { const bm = await createImageBitmap(f); const r = step(bm, bm.width, bm.height, 'photo'); if (!r.ok) miss++; } catch (e) { miss++; }
+    busy(true, `Fotók feldolgozása… ${++i}/${files.length}`, i / files.length);
+  }
+  busy(false);
+  $('camNote').textContent = miss ? `${miss} fotón nem találtam elég jól a kártyát (min. 2 marker, éles kép).` : '';
+}
+async function startLive() {
+  if (S.live) { stopLive(); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camBlocked(); return; }
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+    const v = $('vsrc'); v.srcObject = st; await v.play();
+    S.live = st; $('live').textContent = 'Leállítás'; $('camNote').textContent = '';
+    resetSession();
+    const loop = () => {
+      if (!S.live) return;
+      if (v.videoWidth) step(v, v.videoWidth, v.videoHeight, 'live');
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(loop); else requestAnimationFrame(loop);
+    };
+    loop();
+  } catch (e) { camBlocked(e); }
+}
+function stopLive() { if (!S.live) return; S.live.getTracks().forEach(t => t.stop()); S.live = null; $('vsrc').srcObject = null; $('live').textContent = 'Élő kamera'; }
+function camBlocked(e) {
+  $('camNote').textContent = 'Az élő kamerát ez a nézet nem engedi (a beágyazott oldal nem kérhet kamerát). Használd a „Videó felvétele” gombot — telefonon ez megnyitja a kamerát, és a felvételt utána kockánként dolgozom fel. Élő módhoz nyisd meg ugyanezt az oldalt saját HTTPS-tárhelyről (pl. GitHub Pages).';
+}
+$('live').onclick = () => { $('stage').classList.remove('tap'); S.shown = -1; startLive(); };
+$('vid').onchange = e => { const f = e.target.files[0]; if (f) runVideo(f); e.target.value = ''; };
+$('vidCap').onchange = e => { const f = e.target.files[0]; if (f) runVideo(f); e.target.value = ''; };
+$('pics').onchange = e => { const fs = [...e.target.files]; if (fs.length) runPhotos(fs); e.target.value = ''; };
+$('reset').onclick = () => { stopLive(); resetSession(); $('empty').hidden = false; $('chip').hidden = true; vx.clearRect(0, 0, view.width, view.height); };
+$('scale').onchange = () => { if (S.K) { reposeAll(); S.res = null; renderAnalysis(); renderKfs(); updateStats(); drawDial(); drawRig(); } };
+
+// ---------- analysis: tap -> segment + carve -> recognise -> mass -> nutrients
+const NUTS = [['kcal', 'Energia', 'kcal'], ['carb', 'Szénhidrát', 'g'], ['sugar', '  ebből cukor', 'g'], ['fiber', 'Rost', 'g'], ['protein', 'Fehérje', 'g'], ['fat', 'Zsír', 'g']];
+$('foodSel').innerHTML = '<option value="">— válassz ételt —</option>' + FoodTable.map(f => `<option value="${f.key}">${f.hu}</option>`).join('');
+$('foodSel').onchange = () => { const f = FoodTable.find(x => x.key === $('foodSel').value); S.food = f ? { ...f, source: 'kézi választás' } : null; renderAnalysis(); };
+view.addEventListener('click', async e => {
+  if (S.live || S.shown < 0 || S.busy) return;
+  // canvas uses object-fit:contain -> undo the letterboxing
+  const r = view.getBoundingClientRect(), k = Math.min(r.width / view.width, r.height / view.height);
+  const ox = (r.width - view.width * k) / 2, oy = (r.height - view.height * k) / 2;
+  const vxp = (e.clientX - r.left - ox) / k, vyp = (e.clientY - r.top - oy) / k;
+  if (vxp < 0 || vyp < 0 || vxp > view.width || vyp > view.height) return;
+  const s = view.width / S.size[0];
+  await runAnalysis({ idx: S.shown, x: vxp / s, y: vyp / s });
+});
+$('autoBtn').onclick = () => runAnalysis(null);
+async function runAnalysis(seed) {
+  if (S.kfs.length < 4) { $('anaStatus').textContent = 'Legalább 4 kulcskocka kell a térfogathoz.'; return; }
+  S.busy = true; $('st1').className = 'done'; $('st2').className = 'on';
+  const st = t => { $('anaStatus').textContent = t; };
+  try {
+    const t0 = performance.now();
+    S.res = await FoodAnalyze.runAuto(S.kfs, S.K, cardScale(), st, seed);
+    st(`Kész (${((performance.now() - t0) / 1000).toFixed(1)} s) · ${S.res.candidates} tárgyjelölt a kártya körül. Ellenőrizd a kivágást a kulcskockákon — a narancs folt az étel.`);
+    S.shown = S.res.seedIdx;
+    $('st2').className = 'done'; $('st3').className = 'on';
+  } catch (e) { st('Hiba: ' + (e && e.message || e)); S.res = null; $('st1').className = 'on'; $('st2').className = ''; }
+  finally { S.busy = false; renderAnalysis(); drawRig(); if (S.shown >= 0) showKf(S.shown); }
+  if (S.res && sampleFn && !S.food) $('recog').click(); // recognise right away
+}
+function fmt(x, d) { return x.toLocaleString('hu-HU', { maximumFractionDigits: d, minimumFractionDigits: d }); }
+function renderAnalysis() {
+  const R = S.res, f = S.food;
+  $('aV').textContent = R ? fmt(R.volume, 0) + ' cm³' : '–';
+  $('aVr').textContent = R ? `tűréssel (1 rossz maszk megengedve): ${fmt(R.volumeLoose, 0)} cm³` : '';
+  $('aH').textContent = R ? fmt(R.heightMm / 10, 1) + ' cm' : '–';
+  $('aD').textContent = R ? '≤ ' + fmt(2 * R.footprint.rad / 10, 1) + ' cm' : '–';
+  $('aVx').textContent = R ? fmt(R.voxelMm, 1) + ' mm' : '–';
+  $('aN').textContent = R ? String(R.masks.length) : '–';
+  $('recog').disabled = !R || !sampleFn;
+  $('autoBtn').disabled = S.kfs.length < 4 || S.busy || !!S.live;
+  if (f && $('foodSel').value !== f.key) $('foodSel').value = FoodTable.some(x => x.key === f.key) ? f.key : '';
+  const tb = $('nut').tBodies[0];
+  if (!R || !f) { $('aM').textContent = '–'; $('aMr').textContent = R ? 'Válaszd ki vagy ismertesd fel az ételt.' : ''; tb.innerHTML = ''; return; }
+  const m = R.volume * f.rho, mL = R.volumeLoose * f.rho, ed = m * (1 - (f.refuse || 0)), edL = mL * (1 - (f.refuse || 0));
+  $('aM').textContent = fmt(m, 0) + ' g';
+  $('aMr').textContent = `${f.hu}${f.source ? ' · ' + f.source : ''} · sűrűség ${fmt(f.rho, 2)} g/cm³` + (f.refuse ? ` · ehető rész ≈ ${fmt(ed, 0)} g (${fmt(100 * (1 - f.refuse), 0)}%)` : '') + ` · felső becslés ${fmt(f.refuse ? edL : mL, 0)} g`;
+  tb.innerHTML = NUTS.map(([k, n, u]) => `<tr class="${k === 'carb' ? 'key' : ''}"><td>${n.trim() === n ? n : '&nbsp;&nbsp;' + n.trim()}</td><td>${fmt(f[k] || 0, k === 'kcal' ? 0 : 1)} ${u}</td><td>${fmt((f[k] || 0) * ed / 100, k === 'kcal' ? 0 : 1)} ${u}</td></tr>`).join('');
+}
+let sampleFn = null;
+(async () => { try { if (window.claude && window.claude.use) { sampleFn = await window.claude.use('sample'); if (sampleFn) { const lim = await sampleFn.limits().catch(() => null); if (!lim || !lim.images) sampleFn = null; } } } catch (e) { sampleFn = null; } if (!sampleFn) $('recogNote').textContent = 'A Claude-os felismerés csak a Claude-ban megnyitott oldalon érhető el — itt válaszd ki kézzel az ételt.'; renderAnalysis(); })();
+let recogCtl = null;
+$('recog').onclick = async () => {
+  if (!S.res || !sampleFn) return;
+  $('recog').disabled = true; $('recogNote').textContent = 'Claude nézi a képet…';
+  try {
+    const crop = await S.res.seedCrop, full = S.kfs[S.res.seedIdx].blob;
+    const list = FoodTable.map(f => `${f.key}: ${f.hu}`).join('\n');
+    const prompt = `Ételfelismerés egy tápérték-becslő apphoz. Az 1. kép a felhasználó által kijelölt étel kivágása, a 2. a teljes kép. A fekete-fehér mintás kártya 85,6×54 mm-es méretreferencia, nem étel. A geometriai mérés szerint az étel térfogata kb. ${Math.round(S.res.volume)} cm³, magassága ${Math.round(S.res.heightMm)} mm.\n\nAzonosítsd a kivágás közepén lévő ételt. Ha az alábbi lista valamelyik eleme illik, a kulcsát add vissza:\n${list}\n\nVálasz CSAK egy JSON objektum: {"key": "<lista kulcs vagy null>", "name_hu": "<magyar név>", "confidence": <0..1>, "custom": <null, vagy ha key null: {"rho": <g/cm3 halomsűrűség a tányéron>, "refuse": <nem ehető tömegarány 0..1>, "kcal":..,"carb":..,"sugar":..,"fiber":..,"protein":..,"fat":..} 100 g ehető részre>, "note": "<egy rövid mondat: fajta, elkészítés, rejtett összetevők, vagy ha a térfogat valószerűtlennek tűnik>"}`;
+    const ans = await sampleFn.json(prompt, { images: [crop, full] });
+    const base = ans && ans.key && FoodTable.find(f => f.key === ans.key);
+    if (base) S.food = { ...base, source: `Claude (${Math.round((ans.confidence || 0) * 100)}%)` };
+    else if (ans && ans.custom && ans.custom.rho > 0) S.food = { key: 'custom', hu: ans.name_hu || 'Ismeretlen étel', ...ans.custom, source: `Claude becslés (${Math.round((ans.confidence || 0) * 100)}%) — nincs a referencia-táblában` };
+    $('recogNote').textContent = (ans && ans.name_hu ? ans.name_hu + '. ' : '') + (ans && ans.note || '');
+    $('st3').className = 'done';
+  } catch (e) {
+    const msg = { not_granted: 'A Claude-hívást nem engedélyezted — válassz kézzel.', rate_limited: 'Túl sok kérés — próbáld újra kicsit később.', invalid_json: 'Nem értelmezhető válasz — próbáld újra, vagy válassz kézzel.' }[e && e.code] || 'A felismerés nem sikerült — válassz kézzel.';
+    $('recogNote').textContent = msg;
+  } finally { renderAnalysis(); }
+};
+
+// ---------- load an exported capture (ZIP) for analysis
+async function loadZip(file) {
+  stopLive(); resetSession();
+  try {
+    const zip = await JSZip.loadAsync(file); const js = JSON.parse(await zip.file('session.json').async('string'));
+    const k0 = js.keyframes[0]; S.size = [k0.width, k0.height]; S.mode = 'zip'; S.K = defaultK(k0.width, k0.height); lowResNote(k0.width, k0.height);
+    if (js.card && js.card.printScale) $('scale').value = (50 * js.card.printScale).toFixed(1);
+    for (const k of js.keyframes) {
+      const ab = await zip.file(k.file).async('arraybuffer'), blob = new Blob([ab], { type: 'image/jpeg' });
+      const bm = await createImageBitmap(blob), tC = document.createElement('canvas'); tC.width = 240; tC.height = Math.round(240 * bm.height / bm.width); tC.getContext('2d').drawImage(bm, 0, 0, tC.width, tC.height);
+      const markers = k.markers.map(m => ({ id: m.id, corners: m.corners.map(([x, y]) => ({ x, y })) }));
+      const pose = C.estimatePose(markers, S.K, cardScale()); if (!pose) continue;
+      S.kfs.push({ seq: ++S.seq, markers, pose, sharp: k.sharpness || 0, capScale: 1, w: k.width, h: k.height, blob, thumb: tC.toDataURL('image/jpeg', 0.7) });
+    }
+    maybeRefineFocal(); renderKfs(); updateStats(); drawDial(); drawRig();
+    if (S.kfs.length) { $('empty').hidden = true; showKf(Math.floor(S.kfs.length / 2)); }
+  } catch (e) { $('camNote').textContent = 'A ZIP nem olvasható: ' + (e && e.message || e); }
+}
+$('planSel').onchange = e => { S.plan = e.target.value; S.planBase = null; S.planStart = null; S.planLocked = false; };
+$('zipIn').onchange = e => { const f = e.target.files[0]; if (f) loadZip(f); e.target.value = ''; };
+
+// ---------- export
+function sessionJson() {
+  const [w, h] = S.size || [0, 0];
+  return {
+    format: 'foodscan-capture/1', created: new Date().toISOString(),
+    conventions: { units: 'mm', cardFrame: 'origin at card centre, x right, y toward card top, z up', camera: 'OpenCV pinhole: x right, y down, z forward; X_cam = R * X_card + t (R row-major)', intrinsics: 'per keyframe, in that keyframe image\'s pixels; no distortion model yet' },
+    card: { ...C.CARD, printScale: cardScale() }, source: { mode: S.mode, width: w, height: h, focalSource: S.fSrc },
+    analysis: S.res ? { volumeCm3: +S.res.volume.toFixed(1), volumeLooseCm3: +S.res.volumeLoose.toFixed(1), heightMm: +S.res.heightMm.toFixed(1), footprint: S.res.footprint, seedKeyframe: S.res.seedIdx + 1,
+      food: S.food ? { key: S.food.key, name: S.food.hu, source: S.food.source, densityGcm3: S.food.rho, refuse: S.food.refuse || 0, per100g: Object.fromEntries(NUTS.map(([k]) => [k, S.food[k] || 0])), massG: +(S.res.volume * S.food.rho).toFixed(1) } : null } : null,
+    keyframes: S.kfs.map((k, i) => ({
+      file: `kf_${String(i + 1).padStart(2, '0')}.jpg`, width: k.w, height: k.h,
+      K: { fx: S.K.f * k.capScale, fy: S.K.f * k.capScale, cx: S.K.cx * k.capScale, cy: S.K.cy * k.capScale },
+      R: k.pose.R.map(v => +v.toFixed(7)), t: k.pose.t.map(v => +v.toFixed(3)), C: k.pose.C.map(v => +v.toFixed(2)),
+      azimuthDeg: +k.pose.azim.toFixed(2), elevationDeg: +k.pose.elev.toFixed(2), distanceMm: +k.pose.dist.toFixed(1), reprojRmsPx: +(k.pose.rms * k.capScale).toFixed(3), sharpness: +k.sharp.toFixed(1),
+      markers: k.markers.map(m => ({ id: m.id, corners: m.corners.map(c => [+(c.x * k.capScale).toFixed(2), +(c.y * k.capScale).toFixed(2)]) }))
+    }))
+  };
+}
+let dl = null; (async () => { try { if (window.claude && window.claude.use) dl = await window.claude.use('downloads'); } catch (e) { dl = null; } })();
+$('export').onclick = async () => {
+  try {
+    const zip = new JSZip(); const js = sessionJson(); zip.file('session.json', JSON.stringify(js, null, 1));
+    S.kfs.forEach((k, i) => zip.file(js.keyframes[i].file, k.blob));
+    const blob = await zip.generateAsync({ type: 'blob' }); const name = `foodscan_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`;
+    if (dl) { await dl.save({ filename: name, data: blob }); $('expNote').textContent = 'Mentve: ' + name; }
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); $('expNote').textContent = 'Ha nem indult letöltés, használd a JSON másolását.'; }
+  } catch (e) { $('expNote').textContent = 'Az exportot nem sikerült elindítani: ' + (e && e.message || e); }
+};
+$('copy').onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(sessionJson())); $('expNote').textContent = 'A session.json a vágólapon (képek nélkül).'; } catch (e) { $('expNote').textContent = 'A vágólapra másolás nem engedélyezett itt.'; } };
+
+if (!detector) $('camNote').textContent = 'A marker-felismerő könyvtár nem töltődött be — ellenőrizd a hálózatot és töltsd újra az oldalt.';
+const ro = new ResizeObserver(() => { drawDial(S.last && S.last.pose); drawRig(); }); ro.observe($('dial')); ro.observe($('rig'));
+updateStats();
+}
+</script>
+</body>
+</html>
