@@ -297,8 +297,9 @@ function css(v) { probe.style.color = `var(${v})`; return getComputedStyle(probe
 // ---------- live guidance: target views on a dome, arrow toward the nearest missing one
 function planTargets() {
   const T = [];
-  if (S.plan === 'full') { for (let az = 0; az < 360; az += 30) for (const el of [35, 55]) T.push({ az, el }); T.push({ az: 0, el: 78 }); }
-  else { const b = S.planBase == null ? 0 : S.planBase; for (let k = -3; k <= 3; k++) for (const el of [35, 55]) T.push({ az: (b + 25 * k + 360) % 360, el }); T.push({ az: b, el: 78 }); }
+  // low side views (~22°) show the plate's outer profile and rim height; higher rings see the food surface
+  if (S.plan === 'full') { for (let az = 0; az < 360; az += 30) for (const el of [35, 55]) T.push({ az, el }); for (let az = 0; az < 360; az += 60) T.push({ az, el: 22, low: true }); T.push({ az: 0, el: 78 }); }
+  else { const b = S.planBase == null ? 0 : S.planBase; for (let k = -3; k <= 3; k++) for (const el of [35, 55]) T.push({ az: (b + 25 * k + 360) % 360, el }); for (const k of [-2, 0, 2]) T.push({ az: (b + 25 * k + 360) % 360, el: 22, low: true }); T.push({ az: b, el: 78 }); }
   return T;
 }
 const dirOf = (az, el) => { const a = az * Math.PI / 180, e = el * Math.PI / 180; return [Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e)]; };
@@ -318,7 +319,7 @@ function guide(pose) {
   let dAz = ((nxt.az - pose.azim + 540) % 360) - 180; const dEl = nxt.el - pose.elev, parts = [];
   if (pose.dist < 220) parts.push('kicsit távolabb'); else if (pose.dist > 650) parts.push('gyere közelebb');
   if (Math.abs(dAz) > 8 && nxt.el < 70) parts.push(dAz > 0 ? 'kerülj jobbra' : 'kerülj balra');
-  if (Math.abs(dEl) > 8) parts.push(dEl > 0 ? 'emeld feljebb' : 'engedd lejjebb');
+  if (Math.abs(dEl) > 8) parts.push(dEl > 0 ? 'emeld feljebb' : nxt.low ? 'engedd le oldalnézetbe (a kártya maradjon látható)' : 'engedd lejjebb');
   let text = parts.length ? parts.join(', ') : 'tartsd így, lassan';
   if (S.plan === 'full' && Math.abs(dAz) > 8 && nxt.el < 70) text += ` (vagy forgasd a tányért ${dAz > 0 ? '↻' : '↺'})`;
   return { T, nxt, vx: vx2, vy: vy2, ang: nxt.ang, text: text[0].toUpperCase() + text.slice(1), left: open.length };
