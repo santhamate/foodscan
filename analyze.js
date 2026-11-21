@@ -467,5 +467,5 @@
     let bestI = 0; kfs.forEach((k, i) => { if (k.pose.elev > kfs[bestI].pose.elev) bestI = i; });
     return Object.assign(result, { type, typeHu: P0.hu, z0, zw, p: P0.p, volume: V, volumeLo: Math.min(Vlo, Vhi), volumeHi: Math.max(Vlo, Vhi), points: pts, masks, seedIdx: bestI, seedCrop: cropAround(imgs[bestI], masks[bestI].data), footprint: { ctr, rad: Rw }, heightMm: Math.max(innerMed, rimH), voxelMm: hm.cell });
   }
-  root.FoodAnalyze = { run, runAuto, runDish, loadCV };
+  root.FoodAnalyze = { run, runAuto, runDish, loadCV, toLab, kmeans };
 })(window);

@@ -197,7 +197,7 @@ function ensureSize(w, h, mode) {
   if (!S.size || S.size[0] !== w || S.size[1] !== h || S.mode !== mode) { resetSession(); S.size = [w, h]; S.mode = mode; S.K = defaultK(w, h); S.fSrc = 'alapérték'; lowResNote(w, h); }
 }
 function resetSession() {
-  S.hm = null; S.planBase = null; S.planStart = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
+  S.fg = null; S.food3 = null; S.hm = null; S.planBase = null; S.planStart = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
   renderKfs(); updateStats(); drawDial(); drawRig();
 }
 
@@ -334,11 +334,27 @@ function guide(pose) {
 }
 function drawGuide(pose) {
   const g = guide(pose), W = view.width, H = view.height, u = Math.min(W, H) / 100;
+  // until the food is located: a translucent aiming sphere in the middle of the view, with the guides drawn on it
+  if (!g.done && !S.food3) {
+    const cx = W / 2, cy = H / 2, R = 21 * u, ph = (performance.now() / 900) % 1;
+    vx.save();
+    const gr = vx.createRadialGradient(cx - R * .35, cy - R * .4, R * .1, cx, cy, R); gr.addColorStop(0, 'rgba(255,255,255,.35)'); gr.addColorStop(1, 'rgba(255,255,255,.06)');
+    vx.fillStyle = gr; vx.beginPath(); vx.arc(cx, cy, R, 0, 7); vx.fill(); vx.strokeStyle = 'rgba(255,255,255,.7)'; vx.lineWidth = .5 * u; vx.stroke();
+    vx.strokeStyle = 'rgba(255,255,255,.35)'; vx.beginPath(); vx.ellipse(cx, cy + R * .15, R, R * .32, 0, 0, 7); vx.stroke(); vx.beginPath(); vx.ellipse(cx, cy, R * .38, R, 0, 0, 7); vx.stroke();
+    const dAz0 = ((g.nxt.az - pose.azim + 540) % 360) - 180, dEl0 = g.nxt.el - pose.elev;
+    const chev = (x, y, a, sz, col, al) => { vx.save(); vx.translate(x, y); vx.rotate(a); vx.globalAlpha = al; vx.fillStyle = col; vx.beginPath(); vx.moveTo(sz, 0); vx.lineTo(-sz * .7, -sz * .8); vx.lineTo(-sz * .25, 0); vx.lineTo(-sz * .7, sz * .8); vx.closePath(); vx.fill(); vx.restore(); };
+    if (Math.abs(dAz0) > 6 && g.nxt.el < 70) { // front half of the equator, travelling the way the phone should go
+      const dir = dAz0 > 0 ? 1 : -1; for (let k = 0; k < 4; k++) { const f = (ph + k / 4) % 1, t = Math.PI * (dir > 0 ? 1 - f : f), x = cx + R * 1.05 * Math.cos(t), y = cy + R * .15 + R * .34 * Math.sin(t), a = Math.atan2(R * .34 * Math.cos(t) * -dir, -R * 1.05 * Math.sin(t) * -dir); chev(x, y, a, 4 * u, '#ff4f00', Math.sin(Math.PI * f)); } }
+    if (Math.abs(dEl0) > 6) { // two meridians, curving over the sphere
+      const up = dEl0 > 0; for (const side of [-1, 1]) for (let k = 0; k < 3; k++) { const f = (ph + k / 3) % 1, t = (up ? f : 1 - f) * Math.PI - Math.PI / 2, x = cx + side * R * .55 * Math.cos(t), y = cy - R * 1.02 * Math.sin(t), a = Math.atan2(-R * 1.02 * Math.cos(t) * (up ? 1 : -1), -side * R * .55 * Math.sin(t) * (up ? 1 : -1)); chev(x, y, a, 3.8 * u, '#ffd400', Math.sin(Math.PI * f)); } }
+    vx.font = `600 ${3.4 * u}px Geist, system-ui, sans-serif`; vx.textAlign = 'center'; vx.fillStyle = 'rgba(0,0,0,.55)'; const tt = 'Igazítsd az ételt a gömbbe'; const tw = vx.measureText(tt).width; vx.fillRect(cx - tw / 2 - 2 * u, cy - R - 8 * u, tw + 4 * u, 5.4 * u); vx.fillStyle = '#fff'; vx.fillText(tt, cx, cy - R - 4 * u);
+    vx.restore();
+  }
   // animated curved guides drawn in the scene: an orbit arc on the table around the card (go around)
   // and a meridian arc over it (go higher / lower). Chevrons travel along the path the phone should take.
-  if (!g.done) {
+  if (!g.done && S.food3) {
     const sc = W / S.size[0], P3 = X => { const q = C.project(pose.R, pose.t, S.K, X); return q[2] > 0 ? [q[0] * sc, q[1] * sc] : null; };
-    const rr = Math.max(70, Math.min(150, 0.3 * pose.dist)) * cardScale(), dAz = ((g.nxt.az - pose.azim + 540) % 360) - 180, dEl = g.nxt.el - pose.elev;
+    const F = S.food3, fc = F ? F.ctr : [0, 0], rr = F ? Math.max(60, Math.min(200, 1.35 * F.rad)) : Math.max(70, Math.min(150, 0.3 * pose.dist)) * cardScale(), dAz = ((g.nxt.az - pose.azim + 540) % 360) - 180, dEl = g.nxt.el - pose.elev;
     const phase = (performance.now() / 900) % 1;
     const path = (pts, col) => {
       const q = pts.map(P3).filter(Boolean); if (q.length < 2) return;
@@ -355,16 +371,20 @@ function drawGuide(pose) {
       const [ex, ey, ea] = at(tot); chev(ex, ey, ea, 4.4 * u, 1);
       vx.restore();
     };
-    { const ring = []; for (let k = 0; k <= 48; k++) { const q = P3([rr * Math.cos(k * Math.PI / 24), rr * Math.sin(k * Math.PI / 24), 0]); if (q) ring.push(q); }
-      vx.save(); vx.strokeStyle = 'rgba(255,255,255,.35)'; vx.lineWidth = .6 * u; vx.beginPath(); ring.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke(); vx.restore(); }
+    { const ring = []; for (let k = 0; k <= 48; k++) { const q = P3([fc[0] + rr * Math.cos(k * Math.PI / 24), fc[1] + rr * Math.sin(k * Math.PI / 24), 0]); if (q) ring.push(q); }
+      vx.save(); vx.strokeStyle = F ? 'rgba(67,194,122,.8)' : 'rgba(255,255,255,.35)'; vx.lineWidth = .6 * u; vx.beginPath(); ring.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke(); vx.restore(); }
     if (Math.abs(dAz) > 6 && g.nxt.el < 70) { // orbit: from the point under the phone to the target azimuth, on the table
-      const pts = []; for (let k = 0; k <= 24; k++) { const a = (pose.azim + dAz * k / 24) * Math.PI / 180; pts.push([rr * Math.cos(a), rr * Math.sin(a), 0]); }
+      const pts = []; for (let k = 0; k <= 24; k++) { const a = (pose.azim + dAz * k / 24) * Math.PI / 180; pts.push([fc[0] + rr * Math.cos(a), fc[1] + rr * Math.sin(a), 0]); }
       path(pts, '#ff4f00');
     }
-    if (Math.abs(dEl) > 6) { // meridian over the card in the phone's own azimuth
-      const a = pose.azim * Math.PI / 180, rm = 0.8 * rr, pts = [];
-      for (let k = 0; k <= 20; k++) { const e = (pose.elev + dEl * k / 20) * Math.PI / 180; pts.push([rm * Math.cos(e) * Math.cos(a), rm * Math.cos(e) * Math.sin(a), rm * Math.sin(e)]); }
-      path(pts, '#ffd400');
+    if (Math.abs(dEl) > 6) { // up/down: arcs on a dome over the food, a little to each side so the curve reads clearly
+      const rm = 1.05 * rr, dome = (az, e0, e1, n) => { const a = az * Math.PI / 180, pts = []; for (let k = 0; k <= n; k++) { const e = (e0 + (e1 - e0) * k / n) * Math.PI / 180; pts.push([fc[0] + rm * Math.cos(e) * Math.cos(a), fc[1] + rm * Math.cos(e) * Math.sin(a), rm * Math.sin(e)]); } return pts; };
+      // faint dome wireframe: meridians and one latitude ring
+      vx.save(); vx.strokeStyle = 'rgba(255,212,0,.28)'; vx.lineWidth = .5 * u;
+      for (const off of [-60, -32, 32, 60]) { const q = dome(pose.azim + off, 0, 88, 22).map(P3).filter(Boolean); vx.beginPath(); q.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke(); }
+      { const e = Math.min(80, Math.max(10, g.nxt.el)) * Math.PI / 180, q = []; for (let k = -75; k <= 75; k += 5) { const a = (pose.azim + k) * Math.PI / 180, p = P3([fc[0] + rm * Math.cos(e) * Math.cos(a), fc[1] + rm * Math.cos(e) * Math.sin(a), rm * Math.sin(e)]); if (p) q.push(p); } vx.setLineDash([3 * u, 2 * u]); vx.beginPath(); q.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke(); vx.setLineDash([]); }
+      vx.restore();
+      for (const off of [-32, 32]) path(dome(pose.azim + off, pose.elev, g.nxt.el, 20), '#ffd400');
     }
   }
   // mini dome map, bottom-right
@@ -506,9 +526,40 @@ async function showKf(i) {
 }
 
 // ---------- one frame end-to-end
+// ---------- live food locator: plane grid around the card, votes for "not table-coloured" over many frames
+const FG = { ext: 300, cell: 10 }; FG.N = Math.round(2 * FG.ext / FG.cell);
+function locateFood(a) {
+  if (!a.pose || a.pose.nMarkers < 2 || !window.FoodAnalyze || !FoodAnalyze.toLab) return;
+  if (!S.fg) S.fg = { vote: new Float32Array(FG.N * FG.N), seen: new Float32Array(FG.N * FG.N), n: 0 };
+  const w = detC.width, h = detC.height, d = detX.getImageData(0, 0, w, h).data, K = { f: S.K.f * a.s, cx: S.K.cx * a.s, cy: S.K.cy * a.s }, cs = cardScale();
+  const idx = [], labs = [];
+  for (let ix = 0; ix < FG.N; ix++) for (let iy = 0; iy < FG.N; iy++) {
+    const X = (-FG.ext + (ix + 0.5) * FG.cell) * cs, Y = (-FG.ext + (iy + 0.5) * FG.cell) * cs;
+    if (Math.abs(X) < (C.CARD.w / 2 + 8) * cs && Math.abs(Y) < (C.CARD.h / 2 + 8) * cs) continue;
+    const q = C.project(a.pose.R, a.pose.t, K, [X, Y, 0]), u = q[0] | 0, v = q[1] | 0;
+    if (q[2] <= 0 || u < 0 || v < 0 || u >= w || v >= h) continue;
+    const o = 4 * (v * w + u); idx.push(ix * FG.N + iy); labs.push(FoodAnalyze.toLab(d[o], d[o + 1], d[o + 2]));
+  }
+  if (labs.length < 200) return;
+  const modes = FoodAnalyze.kmeans(labs, 4, 6).filter(m => m.share >= 0.18).map(m => m.c);
+  labs.forEach((L, j) => { let best = 1e9; for (const c of modes) best = Math.min(best, Math.hypot(L[1] - c[1], L[2] - c[2]) + Math.max(0, Math.abs(L[0] - c[0]) - 30) * 0.5); const c = idx[j]; S.fg.seen[c]++; if (best > 12) S.fg.vote[c]++; });
+  S.fg.n++;
+  // components of consistently non-table cells; the biggest one near the card is the food (or its plate)
+  const N = FG.N, m = new Uint8Array(N * N); for (let c = 0; c < m.length; c++) m[c] = S.fg.seen[c] >= 2 && S.fg.vote[c] / S.fg.seen[c] > 0.6 ? 1 : 0;
+  const lab = new Int32Array(N * N); let best = null;
+  for (let c0 = 0; c0 < m.length; c0++) { if (!m[c0] || lab[c0]) continue; const st = [c0], cells = []; lab[c0] = 1;
+    while (st.length) { const j = st.pop(); cells.push(j); const x = (j / N) | 0, y = j % N; for (const [p2, q2] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (p2 < 0 || q2 < 0 || p2 >= N || q2 >= N) continue; const k = p2 * N + q2; if (m[k] && !lab[k]) { lab[k] = 1; st.push(k); } } }
+    if (cells.length < 12) continue;
+    let sx = 0, sy = 0; cells.forEach(j => { sx += -FG.ext + (((j / N) | 0) + 0.5) * FG.cell; sy += -FG.ext + ((j % N) + 0.5) * FG.cell; });
+    const ctr = [sx / cells.length * cs, sy / cells.length * cs], score = cells.length / (1 + Math.hypot(...ctr) / 120);
+    if (!best || score > best.score) best = { ctr, rad: Math.sqrt(cells.length / Math.PI) * FG.cell * cs, score };
+  }
+  if (best) S.food3 = best;
+}
 function step(src, sw, sh, mode) {
   ensureSize(sw, sh, mode);
   const a = analyse(src, sw, sh);
+  if (mode === 'live' && (S.frameNo = (S.frameNo || 0) + 1) % 5 === 0) { try { locateFood(a); } catch (e) {} }
   const r = considerKeyframe(src, sw, sh, a, mode);
   S.last = { pose: a.pose, s: a.s, isKf: r.ok };
   if (mode === 'live' || r.ok || mode === 'photo') drawStage(detC, a, r.why, r.ok);
