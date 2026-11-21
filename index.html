@@ -197,7 +197,7 @@ function ensureSize(w, h, mode) {
   if (!S.size || S.size[0] !== w || S.size[1] !== h || S.mode !== mode) { resetSession(); S.size = [w, h]; S.mode = mode; S.K = defaultK(w, h); S.fSrc = 'alapérték'; lowResNote(w, h); }
 }
 function resetSession() {
-  S.fg = null; S.food3 = null; S.hm = null; S.planBase = null; S.planStart = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
+  S.fg = null; S.food3 = null; S.hm = null; S.planBase = null; S.planStart = null; S.planStartEl = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
   renderKfs(); updateStats(); drawDial(); drawRig();
 }
 
@@ -295,33 +295,31 @@ const probe = document.createElement('i'); probe.style.display = 'none'; documen
 function css(v) { probe.style.color = `var(${v})`; return getComputedStyle(probe).color || '#888'; } // resolves light-dark()
 
 // ---------- live guidance: target views on a dome, arrow toward the nearest missing one
+// Ordered, serpentine scan path: sweep the starting height band from the start direction to the other end,
+// step up/down to the other band and sweep back, then finish with a top view and a low side view.
 function planTargets() {
-  const T = [];
-  // low side views (~22°) show the plate's outer profile and rim height; higher rings see the food surface
-  if (S.plan === 'seated') { // what is comfortable from a chair: ~70° of azimuth, one low and one high band
-    const b = S.planBase == null ? 0 : S.planBase;
-    for (const k of [-25, 0, 25]) T.push({ az: (b + k + 360) % 360, el: 22, low: true });
-    for (const k of [-30, 0, 30]) T.push({ az: (b + k + 360) % 360, el: 42 });
-    for (const k of [-18, 18]) T.push({ az: (b + k + 360) % 360, el: 66 });
-    return T;
-  }
-  if (S.plan === 'full') { for (let az = 0; az < 360; az += 30) for (const el of [35, 55]) T.push({ az, el }); for (let az = 0; az < 360; az += 60) T.push({ az, el: 22, low: true }); T.push({ az: 0, el: 78 }); }
-  else { const b = S.planBase == null ? 0 : S.planBase; for (let k = -3; k <= 3; k++) for (const el of [35, 55]) T.push({ az: (b + 25 * k + 360) % 360, el }); for (const k of [-2, 0, 2]) T.push({ az: (b + 25 * k + 360) % 360, el: 22, low: true }); T.push({ az: b, el: 78 }); }
+  const cfg = { seated: { span: 70, step: 14, rows: [50, 32], top: 68, side: 20 }, quick: { span: 150, step: 25, rows: [55, 35], top: 75, side: 22 }, full: { span: 330, step: 30, rows: [55, 35], top: 78, side: 22 } }[S.plan] || {};
+  const b = S.planStart == null ? 0 : S.planStart, dir = S.planDir || 1, startEl = S.planStartEl == null ? 45 : S.planStartEl;
+  const rows = startEl >= (cfg.rows[0] + cfg.rows[1]) / 2 ? cfg.rows : cfg.rows.slice().reverse();
+  const n = Math.round(cfg.span / cfg.step), T = [];
+  rows.forEach((el, r) => { for (let k = 0; k <= n; k++) { const kk = r % 2 ? n - k : k; T.push({ az: (b + dir * kk * cfg.step + 720) % 360, el, row: r + 1 }); } });
+  const mid = (b + dir * cfg.span / 2 + 720) % 360;
+  T.push({ az: mid, el: cfg.top, row: 3, top: true });
+  T.push({ az: mid, el: cfg.side, row: 4, low: true });
+  if (S.plan === 'full') T.push({ az: (mid + 180) % 360, el: cfg.side, row: 4, low: true });
+  T.forEach((t, i) => t.i = i);
   return T;
 }
 const dirOf = (az, el) => { const a = az * Math.PI / 180, e = el * Math.PI / 180; return [Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e)]; };
 function guide(pose) {
-  // quick plan: lock the 150° arc in the direction the user starts walking
-  if (S.planStart == null) S.planStart = pose.azim;
-  if (S.plan === 'seated') S.planBase = S.planStart;
-  if (S.plan === 'quick' && !S.planLocked) { const d0 = ((pose.azim - S.planStart + 540) % 360) - 180; S.planBase = Math.abs(d0) > 15 ? (S.planStart + Math.sign(d0) * 65 + 360) % 360 : S.planStart; if (Math.abs(d0) > 15) S.planLocked = true; }
-  if (S.planBase == null) S.planBase = pose.azim;
+  if (S.planStart == null) { S.planStart = pose.azim; S.planStartEl = pose.elev; }
   const T = planTargets(), cur = C.viewDir(pose);
   T.forEach(t => { const d = dirOf(t.az, t.el); t.done = S.kfs.some(k => C.angleBetween(d, C.viewDir(k.pose)) < (t.el > 70 ? 18 : 13)); t.ang = C.angleBetween(d, cur); });
   const open = T.filter(t => !t.done);
   if (!open.length) return { T, done: true, text: 'Kész ✓ — minden nézet megvan, állítsd le' };
   // prefer staying in the current height band, then the nearest
-  const nxt = open.reduce((a, b) => (a.ang + 0.4 * Math.abs(a.el - pose.elev)) <= (b.ang + 0.4 * Math.abs(b.el - pose.elev)) ? a : b);
+  // strictly in order: the first view of the path that is still missing
+  const nxt = open.reduce((a, b) => a.i <= b.i ? a : b);
   const Ct = dirOf(nxt.az, nxt.el).map(x => x * pose.dist), D = [Ct[0] - pose.C[0], Ct[1] - pose.C[1], Ct[2] - pose.C[2]], R = pose.R;
   const vx2 = R[0] * D[0] + R[1] * D[1] + R[2] * D[2], vy2 = R[3] * D[0] + R[4] * D[1] + R[5] * D[2]; // camera-frame motion (x right, y down)
   let dAz = ((nxt.az - pose.azim + 540) % 360) - 180; const dEl = nxt.el - pose.elev, parts = [];
@@ -330,7 +328,8 @@ function guide(pose) {
   if (Math.abs(dEl) > 8) parts.push(dEl > 0 ? 'emeld feljebb' : nxt.low ? 'engedd le oldalnézetbe (a kártya maradjon látható)' : 'engedd lejjebb');
   let text = parts.length ? parts.join(', ') : 'tartsd így, lassan';
   if (S.plan === 'full' && Math.abs(dAz) > 8 && nxt.el < 70) text += ` (vagy forgasd a tányért ${dAz > 0 ? '↻' : '↺'})`;
-  return { T, nxt, vx: vx2, vy: vy2, ang: nxt.ang, text: text[0].toUpperCase() + text.slice(1), left: open.length };
+  const stage = nxt.top ? 'Felülnézet' : nxt.low ? 'Oldalnézet' : `${nxt.row}. sáv (${nxt.el >= 45 ? 'felső' : 'alsó'})`;
+  return { T, nxt, vx: vx2, vy: vy2, ang: nxt.ang, text: S.kfs.length < 2 ? `Kezdd a bal szélről · ${stage} · ${text}` : `${stage} · ${text}`, left: open.length };
 }
 function drawGuide(pose) {
   const g = guide(pose), W = view.width, H = view.height, u = Math.min(W, H) / 100;
@@ -391,6 +390,7 @@ function drawGuide(pose) {
   const r = 15 * u, mx = W - r - 3 * u, my = H - r - 9 * u, rOf = el => r * (90 - el) / 90;
   vx.save(); vx.fillStyle = 'rgba(0,0,0,.55)'; vx.beginPath(); vx.arc(mx, my, r + 1.5 * u, 0, 7); vx.fill();
   vx.strokeStyle = 'rgba(255,255,255,.35)'; vx.lineWidth = .3 * u; [0, 45].forEach(el => { vx.beginPath(); vx.arc(mx, my, rOf(el), 0, 7); vx.stroke(); });
+  { vx.strokeStyle = 'rgba(255,255,255,.4)'; vx.lineWidth = .35 * u; vx.beginPath(); g.T.forEach((t, i) => { const rr = rOf(t.el), a = t.az * Math.PI / 180, px = mx + rr * Math.cos(a), py = my - rr * Math.sin(a); i ? vx.lineTo(px, py) : vx.moveTo(px, py); }); vx.stroke(); }
   g.T.forEach(t => { const rr = rOf(t.el), a = t.az * Math.PI / 180, px = mx + rr * Math.cos(a), py = my - rr * Math.sin(a); vx.beginPath(); vx.arc(px, py, 1.5 * u, 0, 7); vx.fillStyle = t.done ? '#43c27a' : 'rgba(255,255,255,.55)'; vx.fill(); if (g.nxt === t) { vx.strokeStyle = '#ff4f00'; vx.lineWidth = .7 * u; vx.beginPath(); vx.arc(px, py, 2.8 * u, 0, 7); vx.stroke(); } });
   { const rr = rOf(pose.elev), a = pose.azim * Math.PI / 180; vx.fillStyle = '#ff4f00'; vx.beginPath(); vx.arc(mx + rr * Math.cos(a), my - rr * Math.sin(a), 1.9 * u, 0, 7); vx.fill(); }
   // instruction banner
@@ -778,7 +778,7 @@ async function loadZip(file) {
     if (S.kfs.length) { $('empty').hidden = true; showKf(Math.floor(S.kfs.length / 2)); }
   } catch (e) { $('camNote').textContent = 'A ZIP nem olvasható: ' + (e && e.message || e); }
 }
-$('planSel').onchange = e => { S.plan = e.target.value; S.planBase = null; S.planStart = null; S.planLocked = false; };
+$('planSel').onchange = e => { S.plan = e.target.value; S.planBase = null; S.planStart = null; S.planStartEl = null; S.planLocked = false; };
 $('zipIn').onchange = e => { const f = e.target.files[0]; if (f) loadZip(f); e.target.value = ''; };
 
 // ---------- export
