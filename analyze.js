@@ -343,5 +343,125 @@
   }
   function dilate(m, w, h, r) { const inv = new Uint8Array(m.length); for (let i = 0; i < m.length; i++) inv[i] = m[i] ? 0 : 1; const e = erode(inv, w, h, r); const o = new Uint8Array(m.length); for (let i = 0; i < m.length; i++) o[i] = e[i] ? 0 : 1; return o; }
 
-  root.FoodAnalyze = { run, runAuto, loadCV };
+
+  // ---------- dish mode: multi-view plane sweep -> height map -> container (plate/bowl) -> volume
+  function grayOf(im) { const g = new Float32Array(im.w * im.h); for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * im.rgba[j] + 0.587 * im.rgba[j + 1] + 0.114 * im.rgba[j + 2]; return g; }
+  function bilin(g, w, h, u, v) { if (u < 0 || v < 0 || u >= w - 1 || v >= h - 1) return -1; const x = u | 0, y = v | 0, fx = u - x, fy = v - y, i = y * w + x; return (g[i] * (1 - fx) + g[i + 1] * fx) * (1 - fy) + (g[i + w] * (1 - fx) + g[i + w + 1] * fx) * fy; }
+  async function heightMap(views, opts, onStatus) {
+    const ext = opts.ext, cell = opts.cell, N = Math.round(2 * ext / cell), zs = []; for (let z = 0; z <= opts.zmax; z += opts.dz) zs.push(z);
+    const off = []; for (const a of [-0.4, 0, 0.4]) for (const b of [-0.4, 0, 0.4]) off.push([a * cell, b * cell]);
+    const best = new Float32Array(N * N).fill(-2), H = new Float32Array(N * N), S = new Float32Array(9), v9 = new Float32Array(9);
+    for (let zi = 0; zi < zs.length; zi++) {
+      const z = zs[zi];
+      if (zi % 4 === 0) { onStatus && onStatus(`Felszínmérés (plane sweep) ${Math.round(100 * zi / zs.length)}%`); await new Promise(r => setTimeout(r, 0)); }
+      for (let ix = 0; ix < N; ix++) { const X0 = -ext + (ix + 0.5) * cell;
+        for (let iy = 0; iy < N; iy++) { const Y0 = -ext + (iy + 0.5) * cell;
+          S.fill(0); let n = 0;
+          for (const vw of views) {
+            const R = vw.R, t = vw.t, K = vw.K; let ok = true, m = 0;
+            for (let k = 0; k < 9; k++) { const X = X0 + off[k][0], Y = Y0 + off[k][1];
+              const zc = R[6] * X + R[7] * Y + R[8] * z + t[2]; if (zc <= 0) { ok = false; break; }
+              const val = bilin(vw.g, vw.w, vw.h, K.f * (R[0] * X + R[1] * Y + R[2] * z + t[0]) / zc + K.cx, K.f * (R[3] * X + R[4] * Y + R[5] * z + t[1]) / zc + K.cy);
+              if (val < 0) { ok = false; break; } v9[k] = val; m += val; }
+            if (!ok) continue;
+            m /= 9; let sd = 0; for (let k = 0; k < 9; k++) sd += (v9[k] - m) ** 2; sd = Math.sqrt(sd / 9) + 1;
+            for (let k = 0; k < 9; k++) S[k] += (v9[k] - m) / sd; n++;
+          }
+          if (n < 3) continue;
+          let ss = 0; for (let k = 0; k < 9; k++) ss += S[k] * S[k];
+          const sc = (ss / 9 - n) / (n * (n - 1)), c = ix * N + iy;
+          if (sc > best[c]) { best[c] = sc; H[c] = z; }
+        } }
+    }
+    return { H, C: best, N, cell, ext };
+  }
+  function labelGrid(m, N) { const lab = new Int32Array(N * N); const comps = []; const st = [];
+    for (let i = 0; i < m.length; i++) { if (!m[i] || lab[i]) continue; const c = { cells: [] }; lab[i] = comps.length + 1; st.push(i);
+      while (st.length) { const j = st.pop(); c.cells.push(j); const x = (j / N) | 0, y = j % N;
+        for (const [a, b] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (a < 0 || b < 0 || a >= N || b >= N) continue; const k = a * N + b; if (m[k] && !lab[k]) { lab[k] = lab[i]; st.push(k); } } }
+      comps.push(c); }
+    return { lab, comps }; }
+  function morph(m, N, r, dil) { let a = m; for (let it = 0; it < r; it++) { const b = new Uint8Array(N * N);
+      for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) { const i = x * N + y; let v = a[i];
+        const nb = [x > 0 ? a[i - N] : 0, x < N - 1 ? a[i + N] : 0, y > 0 ? a[i - 1] : 0, y < N - 1 ? a[i + 1] : 0];
+        b[i] = dil ? (v || nb.some(q => q) ? 1 : 0) : (v && nb.every(q => q) ? 1 : 0); }
+      a = b; } return a; }
+  const PROFILES = { flat: { hu: 'lapos tányér', z0: 4, p: 8, pr: [5, 12] }, soup: { hu: 'mélytányér', z0: 5, p: 3, pr: [2, 5] }, bowl: { hu: 'tál', z0: 8, p: 2, pr: [1.5, 3.5] } };
+  // volume of the food above a rotationally symmetric container floor z_b(r) = z0 + (zw - z0) (r/Rw)^p
+  function dishVolume(hm, ctr, Rw, zw, z0, p, cells) {
+    let v = 0; const a = hm.cell * hm.cell;
+    for (let c = 0; c < hm.N * hm.N; c++) { const x = -hm.ext + (((c / hm.N) | 0) + 0.5) * hm.cell, y = -hm.ext + ((c % hm.N) + 0.5) * hm.cell, r = Math.hypot(x - ctr[0], y - ctr[1]);
+      if (r > Rw) continue; const zb = z0 + (zw - z0) * Math.pow(r / Rw, p); v += Math.max(0, hm.Hf[c] - zb) * a; }
+    return v / 1000;
+  }
+  async function runDish(kfs, K, cardScale, onStatus, tap) {
+    const imgs = [];
+    for (let i = 0; i < kfs.length; i++) { onStatus && onStatus(`Képek dekódolása ${i + 1}/${kfs.length}`); imgs.push(await decode(kfs[i])); }
+    // up to 14 views spread over azimuth
+    const order = kfs.map((k, i) => i).sort((a, b) => kfs[a].pose.azim - kfs[b].pose.azim), nv = Math.min(14, order.length);
+    const pick = []; for (let j = 0; j < nv; j++) pick.push(order[Math.round(j * (order.length - 1) / Math.max(1, nv - 1))]);
+    const views = [...new Set(pick)].map(i => ({ i, R: kfs[i].pose.R, t: kfs[i].pose.t, K: scaleK(K, imgs[i].k), g: grayOf(imgs[i]), w: imgs[i].w, h: imgs[i].h }));
+    const hm = await heightMap(views, { ext: 300 * cardScale, cell: 5 * cardScale, zmax: 140 * cardScale, dz: 2 * cardScale }, onStatus);
+    const N = hm.N, valid = new Uint8Array(N * N); for (let i = 0; i < valid.length; i++) valid[i] = hm.C[i] > 0.3 ? 1 : 0;
+    // fill unreliable cells with the median of reliable neighbours (a few passes)
+    const Hf = Float32Array.from(hm.H); let known = Uint8Array.from(valid);
+    for (let pass = 0; pass < 6; pass++) { const nk = Uint8Array.from(known);
+      for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) { const i = x * N + y; if (known[i]) continue; const nb = [];
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const a = x + dx, b = y + dy; if (a >= 0 && b >= 0 && a < N && b < N && known[a * N + b]) nb.push(Hf[a * N + b]); }
+        if (nb.length >= 3) { nb.sort((p, q) => p - q); Hf[i] = nb[nb.length >> 1]; nk[i] = 1; } }
+      known = nk; }
+    hm.Hf = Hf; hm.valid = valid;
+    const cellXY = c => [-hm.ext + (((c / N) | 0) + 0.5) * hm.cell, -hm.ext + ((c % N) + 0.5) * hm.cell];
+    const onCard = c => { const [x, y] = cellXY(c); return Math.abs(x) < Core.CARD.w / 2 * cardScale + 8 && Math.abs(y) < Core.CARD.h / 2 * cardScale + 8; };
+    let m = new Uint8Array(N * N); for (let i = 0; i < m.length; i++) m[i] = valid[i] && hm.H[i] > 10 * cardScale && !onCard(i) ? 1 : 0;
+    m = morph(morph(m, N, 1, false), N, 1, true); m = morph(morph(m, N, 2, true), N, 2, false);
+    // fill holes: cells not reachable from the border through empty cells
+    { const out = new Uint8Array(N * N), st = []; for (let k = 0; k < N; k++) for (const c of [k, (N - 1) * N + k, k * N, k * N + N - 1]) if (!m[c] && !out[c]) { out[c] = 1; st.push(c); }
+      while (st.length) { const j = st.pop(), x = (j / N) | 0, y = j % N; for (const [a2, b2] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (a2 < 0 || b2 < 0 || a2 >= N || b2 >= N) continue; const k2 = a2 * N + b2; if (!m[k2] && !out[k2]) { out[k2] = 1; st.push(k2); } } }
+      for (let i = 0; i < m.length; i++) if (!out[i] && !onCard(i)) m[i] = 1; }
+    const { comps } = labelGrid(m, N);
+    let cand = comps.filter(c => c.cells.length * hm.cell * hm.cell >= 2000).map(c => { let sx = 0, sy = 0; for (const j of c.cells) { const [x, y] = cellXY(j); sx += x; sy += y; } return { ...c, ctr: [sx / c.cells.length, sy / c.cells.length] }; });
+    if (!cand.length) return null;
+    let dish;
+    if (tap) { const p = kfs[tap.idx].pose, R = p.R, C0 = p.C, xc = (tap.x - K.cx) / K.f, yc = (tap.y - K.cy) / K.f, d = [R[0] * xc + R[3] * yc + R[6], R[1] * xc + R[4] * yc + R[7], R[2] * xc + R[5] * yc + R[8]];
+      const s = -(C0[2] - 20) / d[2], P = [C0[0] + s * d[0], C0[1] + s * d[1]]; dish = cand.reduce((a, b) => Math.hypot(a.ctr[0] - P[0], a.ctr[1] - P[1]) <= Math.hypot(b.ctr[0] - P[0], b.ctr[1] - P[1]) ? a : b); }
+    else dish = cand.reduce((a, b) => Math.hypot(...a.ctr) <= Math.hypot(...b.ctr) ? a : b);
+    // circle fit (Kasa) on the region boundary
+    const inR = new Uint8Array(N * N); dish.cells.forEach(c => inR[c] = 1);
+    const bnd = dish.cells.filter(c => { const x = (c / N) | 0, y = c % N; return !(x > 0 && inR[c - N] && x < N - 1 && inR[c + N] && y > 0 && inR[c - 1] && y < N - 1 && inR[c + 1]); });
+    let A = [0, 0, 0, 0, 0, 0, 0, 0, 0], bb = [0, 0, 0];
+    for (const c of bnd) { const [x, y] = cellXY(c), row = [2 * x, 2 * y, 1], rhs = x * x + y * y; for (let i = 0; i < 3; i++) { bb[i] += row[i] * rhs; for (let j = 0; j < 3; j++) A[i * 3 + j] += row[i] * row[j]; } }
+    const Ai = Core.inv3(A); if (!Ai) return null;
+    const sol = [0, 1, 2].map(i => Ai[i * 3] * bb[0] + Ai[i * 3 + 1] * bb[1] + Ai[i * 3 + 2] * bb[2]);
+    const ctr = [sol[0], sol[1]]; let Rw = Math.sqrt(sol[2] + ctr[0] ** 2 + ctr[1] ** 2);
+    // radial profile (medians of reliable cells in 5 mm rings)
+    const ringsN = Math.ceil((1.7 * Rw + 30) / 5), rings = Array.from({ length: ringsN }, () => []);
+    for (let c = 0; c < N * N; c++) { if (!valid[c]) continue; const [x, y] = cellXY(c), r = Math.hypot(x - ctr[0], y - ctr[1]); const k = (r / 5) | 0; if (k < ringsN) rings[k].push(hm.H[c]); }
+    const prof = rings.map(a => a.length >= 3 ? a.slice().sort((p, q) => p - q)[a.length >> 1] : null);
+    const inner = prof.slice(0, Math.max(1, Math.floor(0.7 * Rw / 5))).filter(v => v != null), outer = prof.slice(Math.floor(0.7 * Rw / 5), Math.ceil((Rw + 12) / 5)).filter(v => v != null);
+    const med = a => a.length ? a.slice().sort((p, q) => p - q)[a.length >> 1] : 0;
+    const innerMed = med(inner), innerMin = inner.length ? Math.min(...inner) : 0, rimH = outer.length ? Math.max(...outer) : 0;
+    const iq = (() => { const s2 = inner.slice().sort((p, q) => p - q); return s2.length ? s2[Math.floor(s2.length * 0.8)] - s2[Math.floor(s2.length * 0.2)] : 99; })();
+    const isContainer = rimH >= innerMin + 4 * cardScale && (rimH >= innerMed - 2 || iq < 6);
+    // food edge: walk out from the centre while the ring stays at the food level (it ends where the wall rises or the table starts)
+    if (isContainer) { const lvl = innerMed, tol = Math.max(5, 0.25 * lvl); let k = 0;
+      for (k = 0; k < prof.length; k++) { if (prof[k] == null) continue; if (Math.abs(prof[k] - lvl) > tol && k * 5 > 0.5 * Rw) break; }
+      Rw = Math.max(Rw, k * 5); }
+    const result = { hm, ctr, Rw, prof, innerMed, rimH, isContainer, views: views.length, dishCells: dish.cells, candidates: cand.length };
+    if (!isContainer) return result;
+    // container type from rim height above the table; floor model
+    const type = rimH < 25 * cardScale ? 'flat' : rimH < 45 * cardScale ? 'soup' : 'bowl', P0 = PROFILES[type];
+    // floor height where the food meets the wall = food surface in the outer ring of the region
+    const edge = []; for (let c = 0; c < N * N; c++) { const [x, y] = cellXY(c), r = Math.hypot(x - ctr[0], y - ctr[1]); if (r > 0.8 * Rw && r <= Rw && valid[c]) edge.push(hm.H[c]); }
+    const zw = edge.length ? med(edge) : innerMed, z0 = Math.min(P0.z0 * cardScale, innerMin, zw);
+    // the food meets the wall where the region ends: use the fitted radius
+    const V = dishVolume(hm, ctr, Rw, zw, z0, P0.p, dish.cells), Vlo = dishVolume(hm, ctr, Rw, zw, z0, P0.pr[0], dish.cells), Vhi = dishVolume(hm, ctr, Rw, zw, z0, P0.pr[1], dish.cells);
+    // surface points for the 3D view
+    const pts = []; for (let c = 0; c < N * N; c++) { const [x, y] = cellXY(c); if (Math.hypot(x - ctr[0], y - ctr[1]) <= Rw) pts.push(x, y, Hf[c]); }
+    // display masks: the rim circle at the food level projected into each keyframe
+    const masks = kfs.map((kf, i) => { const im = imgs[i], Kk = scaleK(K, im.k), poly = []; for (let a = 0; a < 64; a++) { const q = Core.project(kf.pose.R, kf.pose.t, Kk, [ctr[0] + Rw * Math.cos(a * Math.PI / 32), ctr[1] + Rw * Math.sin(a * Math.PI / 32), zw]); poly.push([q[0], q[1]]); } return { w: im.w, h: im.h, k: im.k, data: rasterPoly(im.w, im.h, [poly]) }; });
+    let bestI = 0; kfs.forEach((k, i) => { if (k.pose.elev > kfs[bestI].pose.elev) bestI = i; });
+    return Object.assign(result, { type, typeHu: P0.hu, z0, zw, p: P0.p, volume: V, volumeLo: Math.min(Vlo, Vhi), volumeHi: Math.max(Vlo, Vhi), points: pts, masks, seedIdx: bestI, seedCrop: cropAround(imgs[bestI], masks[bestI].data), footprint: { ctr, rad: Rw }, heightMm: Math.max(innerMed, rimH), voxelMm: hm.cell });
+  }
+  root.FoodAnalyze = { run, runAuto, runDish, loadCV };
 })(window);

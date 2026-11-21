@@ -64,6 +64,7 @@ label.btn input{display:none}
 .busy{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(0,0,0,.7);color:#fff;border-radius:8px;padding:8px 10px;font-size:14px;display:none;gap:10px;align-items:center}
 .busy .prog{flex:1;margin:0}.busy button{min-height:36px;color:#fff;border-color:#fff}
 .ana{margin-top:16px}
+.hmfig{min-height:0;aspect-ratio:1;max-width:420px;margin-bottom:10px;background:#0b0b0c;border:0}.hmfig .figcap{color:#cfd1d6}
 .steps{margin:0 0 10px;padding-left:20px;font-size:15px}.steps li{margin:3px 0;color:var(--mut)}.steps li.on{color:var(--ink)}.steps li.done{color:var(--ok)}
 .status{font:500 14px 'Geist Mono',monospace;margin:6px 0 12px}
 .anaGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:20px}
@@ -137,7 +138,7 @@ label.btn input{display:none}
   <section class="panel ana" id="ana">
     <h2>Elemzés: étel → térfogat → tömeg → tápérték</h2>
     <ol class="steps">
-      <li id="st1">Nyomd meg az <b>Automatikus elemzés</b> gombot. Az app megkeresi a kártya körül azt a tárgyat, ami minden nézetből kiemelkedik az asztal síkjából — az árnyék és a kártya lapos, ezért kiesik. Ha több tárgy is van, a kártyához legközelebbit veszi; ha mást szeretnél, koppints rá egy kulcskockán.</li>
+      <li id="st1">Nyomd meg az <b>Automatikus elemzés</b> gombot. Előbb felszínt mér több nézetből (magasságtérkép): ha tányért vagy tálat talál, a peremen belüli étel felszínéből és a becsült aljzatból számol. Ha nincs perem (pl. egy alma az asztalon), a sziluettekből faragja ki a tárgyat. Ha több tárgy is van, a kártyához legközelebbit veszi; ha mást szeretnél, koppints rá egy kulcskockán.</li>
       <li id="st2">Minden kulcskockán kivágja az ételt, és a kamerapozíciókból kifaragja a térfogatát.</li>
       <li id="st3">Claude felismeri az ételt (vagy válassz kézzel) → tömeg a sűrűségből → tápérték.</li>
     </ol>
@@ -146,10 +147,11 @@ label.btn input{display:none}
     <p id="anaStatus" class="status">Még nincs elemzés.</p>
     <div class="anaGrid">
       <div>
+        <div class="fig hmfig" id="hmFig" hidden><canvas id="hmCv"></canvas><div class="figcap" id="hmCap">Felülnézeti magasságtérkép (plane sweep)</div></div>
         <div class="big"><span>Becsült térfogat</span><b id="aV">–</b><small id="aVr"></small></div>
         <div class="read">
           <div><span>Magasság</span><b id="aH">–</b></div>
-          <div><span>Talpfelület ⌀</span><b id="aD">–</b></div>
+          <div><span>Étel ⌀</span><b id="aD">–</b></div>
           <div><span>Voxel</span><b id="aVx">–</b></div>
           <div><span>Kockák</span><b id="aN">–</b></div>
         </div>
@@ -164,7 +166,7 @@ label.btn input{display:none}
         <table class="nut" id="nut"><thead><tr><th>Tápanyag</th><th>100 g-ban</th><th>Adagban</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
-    <p class="note">A térfogat „visual hull”: a sziluettekből faragott burok, ezért inkább felülbecsül (a homorú részeket és a takart hátoldalt nem látja). A sűrűség és a tápértékek tájékoztató adatok (USDA FoodData Central, kerekítve). Ha teheted, mérd meg konyhai mérleggel az ételt, és vesd össze — ebből tudjuk kalibrálni.</p>
+    <p class="note">Tányérban: a felszín pontos, de a tányér belső alakját (aljzat) nem látjuk, ezért a típushoz (lapos tányér / mélytányér / tál) tartozó tipikus profillal számolunk — ebből jön a tartomány. Szabadon álló tárgynál a sziluettekből faragott burok inkább felülbecsül. A sűrűség és a tápértékek tájékoztató adatok (USDA FoodData Central, kerekítve). Ha teheted, mérd meg konyhai mérleggel az ételt, és vesd össze — ebből tudjuk kalibrálni.</p>
   </section>
   <p class="note">Koordináták: a kártya közepe az origó, x jobbra, y a kártya teteje felé, z felfelé, mm-ben. Kamera: OpenCV-konvenció (x jobbra, y le, z előre), X<sub>kam</sub> = R·X<sub>kártya</sub> + t.</p>
 </div>
@@ -195,7 +197,7 @@ function ensureSize(w, h, mode) {
   if (!S.size || S.size[0] !== w || S.size[1] !== h || S.mode !== mode) { resetSession(); S.size = [w, h]; S.mode = mode; S.K = defaultK(w, h); S.fSrc = 'alapérték'; lowResNote(w, h); }
 }
 function resetSession() {
-  S.planBase = null; S.planStart = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
+  S.hm = null; S.planBase = null; S.planStart = null; S.planLocked = false; S.kfs = []; S.recentSharp = []; S.last = null; S.sel = -1; S.size = null; S.K = null; S.ref = null; S.res = null; S.shown = -1; S.food = null; renderAnalysis();
   renderKfs(); updateStats(); drawDial(); drawRig();
 }
 
@@ -377,7 +379,7 @@ function drawStage(srcCanvas, a, msg, ok) {
 function drawDial(cur) {
   const cv = $('dial'); const [W, H, d] = fitCanvas(cv); const x = cv.getContext('2d');
   x.clearRect(0, 0, W, H);
-  const cx = W / 2, cy = H / 2 - 8 * d, R = Math.min(W, H) / 2 - 36 * d;
+  const cx = W / 2, cy = H / 2 - 8 * d, R = Math.max(10, Math.min(W, H) / 2 - 36 * d);
   const rOf = el => R * (90 - Math.max(0, Math.min(90, el))) / 90;
   const cov = coverage();
   // covered azimuth sectors (outer ring)
@@ -598,19 +600,48 @@ async function runAnalysis(seed) {
   const st = t => { $('anaStatus').textContent = t; };
   try {
     const t0 = performance.now();
-    S.res = await FoodAnalyze.runAuto(S.kfs, S.K, cardScale(), st, seed);
-    st(`Kész (${((performance.now() - t0) / 1000).toFixed(1)} s) · ${S.res.candidates} tárgyjelölt a kártya körül. Ellenőrizd a kivágást a kulcskockákon — a narancs folt az étel.`);
+    // 1) dish mode (plane sweep): plates, bowls, soups; 2) free-standing objects: silhouette carving
+    let dish = null;
+    try { dish = await FoodAnalyze.runDish(S.kfs, S.K, cardScale(), st, seed); } catch (e) { console.warn('dish mode failed', e); }
+    S.hm = dish && dish.hm ? dish : null;
+    if (dish && dish.isContainer) { S.res = dish; S.res.volumeLoose = dish.volumeHi; S.res.mode = 'dish'; }
+    else { S.res = await FoodAnalyze.runAuto(S.kfs, S.K, cardScale(), st, seed); S.res.mode = 'free'; }
+    st(`Kész (${((performance.now() - t0) / 1000).toFixed(1)} s) · ` + (S.res.mode === 'dish' ? `${S.res.typeHu} felismerve (perem ⌀ ${Math.round(2 * S.res.Rw / 10)} cm, a peremnél ${Math.round(S.res.zw)} mm magas a felszín). Az aljzat alakját becsüljük, ezért van tartomány.` : `szabadon álló tárgy, ${S.res.candidates} jelölt a kártya körül.`) + ' A narancs folt az étel a kulcskockákon.');
     S.shown = S.res.seedIdx;
     $('st2').className = 'done'; $('st3').className = 'on';
   } catch (e) { st('Hiba: ' + (e && e.message || e)); S.res = null; $('st1').className = 'on'; $('st2').className = ''; }
   finally { S.busy = false; renderAnalysis(); drawRig(); if (S.shown >= 0) showKf(S.shown); }
   if (S.res && sampleFn && !S.food) $('recog').click(); // recognise right away
 }
+// top-down height map with the fitted rim, card and the food region
+function drawHeightMap() {
+  const D = S.hm, fig = $('hmFig'); if (!D || !D.hm) { fig.hidden = true; return; } fig.hidden = false;
+  const cv = $('hmCv'); const [W, H] = fitCanvas(cv); const x = cv.getContext('2d'); const hm = D.hm, N = hm.N;
+  // window around the dish
+  const span = Math.max(140, D.Rw * 1.6), cx0 = D.ctr[0], cy0 = D.ctr[1], sc = Math.min(W, H) / (2 * span);
+  const img = x.createImageData(W, H), zmax = Math.max(30, D.rimH * 1.2, D.innerMed * 1.4);
+  const VIR = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
+  const ramp = t => { t = Math.max(0, Math.min(1, t)) * 4; const i = Math.min(3, Math.floor(t)), f = t - i, a = VIR[i], b = VIR[i + 1]; return [0, 1, 2].map(k => Math.round(a[k] + (b[k] - a[k]) * f)); };
+  for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+    const X = cx0 + (px - W / 2) / sc, Y = cy0 - (py - H / 2) / sc, ix = Math.floor((X + hm.ext) / hm.cell), iy = Math.floor((Y + hm.ext) / hm.cell), o = 4 * (py * W + px);
+    if (ix < 0 || iy < 0 || ix >= N || iy >= N) { img.data[o + 3] = 255; continue; }
+    const c = ix * N + iy, [r, g, b] = ramp(hm.Hf[c] / zmax), dim = hm.valid[c] ? 1 : 0.45;
+    img.data[o] = r * dim; img.data[o + 1] = g * dim; img.data[o + 2] = b * dim; img.data[o + 3] = 255;
+  }
+  x.putImageData(img, 0, 0);
+  const P = (X, Y) => [W / 2 + (X - cx0) * sc, H / 2 - (Y - cy0) * sc], d = Math.min(2, devicePixelRatio || 1);
+  x.strokeStyle = '#fff'; x.lineWidth = 2 * d; x.setLineDash([6 * d, 4 * d]); x.beginPath(); const c0 = P(D.ctr[0], D.ctr[1]); x.arc(c0[0], c0[1], D.Rw * sc, 0, 7); x.stroke(); x.setLineDash([]);
+  const cs = cardScale(), a = P(-C.CARD.w / 2 * cs, C.CARD.h / 2 * cs); x.strokeStyle = '#ff4f00'; x.strokeRect(a[0], a[1], C.CARD.w * cs * sc, C.CARD.h * cs * sc);
+  x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(6 * d, 6 * d, 176 * d, 26 * d); x.fillStyle = '#fff'; x.font = `${12 * d}px Geist, sans-serif`;
+  x.fillText('0', 12 * d, 24 * d); for (let i = 0; i < 60; i++) { const [r, g, b] = ramp(i / 59); x.fillStyle = `rgb(${r},${g},${b})`; x.fillRect(24 * d + i * 2 * d, 13 * d, 2 * d, 14 * d); } x.fillStyle = '#fff'; x.fillText(`${Math.round(zmax)} mm`, 148 * d, 24 * d);
+  $('hmCap').textContent = D.isContainer ? `Magasságtérkép · ${D.typeHu}, perem ⌀ ${Math.round(2 * D.Rw / 10)} cm (szaggatott kör), narancs = kártya` : 'Magasságtérkép · nincs tányérperem, szabadon álló tárgyként mérve';
+}
 function fmt(x, d) { return x.toLocaleString('hu-HU', { maximumFractionDigits: d, minimumFractionDigits: d }); }
 function renderAnalysis() {
   const R = S.res, f = S.food;
   $('aV').textContent = R ? fmt(R.volume, 0) + ' cm³' : '–';
-  $('aVr').textContent = R ? `tűréssel (1 rossz maszk megengedve): ${fmt(R.volumeLoose, 0)} cm³` : '';
+  $('aVr').textContent = !R ? '' : R.mode === 'dish' ? `${R.typeHu} · aljzatprofil-tartomány: ${fmt(R.volumeLo, 0)}–${fmt(R.volumeHi, 0)} cm³` : `lazább faragással: ${fmt(R.volumeLoose, 0)} cm³`;
+  drawHeightMap();
   $('aH').textContent = R ? fmt(R.heightMm / 10, 1) + ' cm' : '–';
   $('aD').textContent = R ? '≤ ' + fmt(2 * R.footprint.rad / 10, 1) + ' cm' : '–';
   $('aVx').textContent = R ? fmt(R.voxelMm, 1) + ' mm' : '–';
@@ -620,7 +651,7 @@ function renderAnalysis() {
   if (f && $('foodSel').value !== f.key) $('foodSel').value = FoodTable.some(x => x.key === f.key) ? f.key : '';
   const tb = $('nut').tBodies[0];
   if (!R || !f) { $('aM').textContent = '–'; $('aMr').textContent = R ? 'Válaszd ki vagy ismertesd fel az ételt.' : ''; tb.innerHTML = ''; return; }
-  const m = R.volume * f.rho, mL = R.volumeLoose * f.rho, ed = m * (1 - (f.refuse || 0)), edL = mL * (1 - (f.refuse || 0));
+  const m = R.volume * f.rho, mL = (R.mode === 'dish' ? R.volumeHi : R.volumeLoose) * f.rho, ed = m * (1 - (f.refuse || 0)), edL = mL * (1 - (f.refuse || 0));
   $('aM').textContent = fmt(m, 0) + ' g';
   $('aMr').textContent = `${f.hu}${f.source ? ' · ' + f.source : ''} · sűrűség ${fmt(f.rho, 2)} g/cm³` + (f.refuse ? ` · ehető rész ≈ ${fmt(ed, 0)} g (${fmt(100 * (1 - f.refuse), 0)}%)` : '') + ` · felső becslés ${fmt(f.refuse ? edL : mL, 0)} g`;
   tb.innerHTML = NUTS.map(([k, n, u]) => `<tr class="${k === 'carb' ? 'key' : ''}"><td>${n.trim() === n ? n : '&nbsp;&nbsp;' + n.trim()}</td><td>${fmt(f[k] || 0, k === 'kcal' ? 0 : 1)} ${u}</td><td>${fmt((f[k] || 0) * ed / 100, k === 'kcal' ? 0 : 1)} ${u}</td></tr>`).join('');
