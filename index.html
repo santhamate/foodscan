@@ -96,7 +96,7 @@ label.btn input{display:none}
         <label class="btn pri" id="vidLbl">Videó a galériából<input id="vid" type="file" accept="video/*,.mov,.mp4,.m4v,video/quicktime,video/mp4"></label>
         <label class="btn">Videó felvétele<input id="vidCap" type="file" accept="video/*" capture="environment"></label>
         <label class="btn">Fotók<input id="pics" type="file" accept="image/*" multiple></label>
-        <label class="field" style="gap:6px"><select id="planSel" class="sel" aria-label="Felvételi terv"><option value="quick">Gyors ív (~150°)</option><option value="full">Teljes kör / forgatótányér</option></select></label>
+        <label class="field" style="gap:6px"><select id="planSel" class="sel" aria-label="Felvételi terv"><option value="seated">Ülve (~70° ív, alacsony + magas)</option><option value="quick">Gyors ív (~150°)</option><option value="full">Teljes kör / forgatótányér</option></select></label>
         <label class="btn">ZIP betöltése<input id="zipIn" type="file" accept=".zip,application/zip"></label>
         <button class="btn" id="reset" type="button">Új mérés</button>
       </div>
@@ -186,7 +186,7 @@ const DET_MAX = 1280, CAP_MAX = 2048, MIN_ANG = 7, MAX_KF = 48;
 let detector = null;
 try { detector = new AR.Detector({ dictionaryName: C.CARD.dict, maxHammingDistance: C.CARD.maxHamming }); } catch (e) { console.error(e); }
 
-const S = window.FoodScanState = { K: null, size: null, kfs: [], recentSharp: [], last: null, sel: -1, cancel: false, live: null, busy: false, fSrc: 'alapérték', mode: null, seq: 0, plan: 'quick', planBase: null, ref: null, res: null, shown: -1, food: null };
+const S = window.FoodScanState = { K: null, size: null, kfs: [], recentSharp: [], last: null, sel: -1, cancel: false, live: null, busy: false, fSrc: 'alapérték', mode: null, seq: 0, plan: 'seated', planBase: null, ref: null, res: null, shown: -1, food: null };
 const detC = document.createElement('canvas'), detX = detC.getContext('2d', { willReadFrequently: true });
 const capC = document.createElement('canvas'), capX = capC.getContext('2d');
 const view = $('view'), vx = view.getContext('2d');
@@ -298,6 +298,13 @@ function css(v) { probe.style.color = `var(${v})`; return getComputedStyle(probe
 function planTargets() {
   const T = [];
   // low side views (~22°) show the plate's outer profile and rim height; higher rings see the food surface
+  if (S.plan === 'seated') { // what is comfortable from a chair: ~70° of azimuth, one low and one high band
+    const b = S.planBase == null ? 0 : S.planBase;
+    for (const k of [-25, 0, 25]) T.push({ az: (b + k + 360) % 360, el: 22, low: true });
+    for (const k of [-30, 0, 30]) T.push({ az: (b + k + 360) % 360, el: 42 });
+    for (const k of [-18, 18]) T.push({ az: (b + k + 360) % 360, el: 66 });
+    return T;
+  }
   if (S.plan === 'full') { for (let az = 0; az < 360; az += 30) for (const el of [35, 55]) T.push({ az, el }); for (let az = 0; az < 360; az += 60) T.push({ az, el: 22, low: true }); T.push({ az: 0, el: 78 }); }
   else { const b = S.planBase == null ? 0 : S.planBase; for (let k = -3; k <= 3; k++) for (const el of [35, 55]) T.push({ az: (b + 25 * k + 360) % 360, el }); for (const k of [-2, 0, 2]) T.push({ az: (b + 25 * k + 360) % 360, el: 22, low: true }); T.push({ az: b, el: 78 }); }
   return T;
@@ -306,6 +313,7 @@ const dirOf = (az, el) => { const a = az * Math.PI / 180, e = el * Math.PI / 180
 function guide(pose) {
   // quick plan: lock the 150° arc in the direction the user starts walking
   if (S.planStart == null) S.planStart = pose.azim;
+  if (S.plan === 'seated') S.planBase = S.planStart;
   if (S.plan === 'quick' && !S.planLocked) { const d0 = ((pose.azim - S.planStart + 540) % 360) - 180; S.planBase = Math.abs(d0) > 15 ? (S.planStart + Math.sign(d0) * 65 + 360) % 360 : S.planStart; if (Math.abs(d0) > 15) S.planLocked = true; }
   if (S.planBase == null) S.planBase = pose.azim;
   const T = planTargets(), cur = C.viewDir(pose);
@@ -326,16 +334,38 @@ function guide(pose) {
 }
 function drawGuide(pose) {
   const g = guide(pose), W = view.width, H = view.height, u = Math.min(W, H) / 100;
-  // arrow from the centre toward where the phone should move
+  // animated curved guides drawn in the scene: an orbit arc on the table around the card (go around)
+  // and a meridian arc over it (go higher / lower). Chevrons travel along the path the phone should take.
   if (!g.done) {
-    const n = Math.hypot(g.vx, g.vy) || 1, len = Math.min(1, g.ang / 25) * 22 * u + 8 * u, ux = g.vx / n, uy = g.vy / n, cx = W / 2, cy = H / 2;
-    const tx = cx + ux * len, ty = cy + uy * len;
-    vx.save(); vx.lineCap = 'round'; vx.strokeStyle = 'rgba(0,0,0,.45)'; vx.lineWidth = 3.4 * u;
-    vx.beginPath(); vx.moveTo(cx, cy); vx.lineTo(tx, ty); vx.stroke();
-    vx.strokeStyle = '#ff4f00'; vx.fillStyle = '#ff4f00'; vx.lineWidth = 2.2 * u;
-    vx.beginPath(); vx.moveTo(cx, cy); vx.lineTo(tx, ty); vx.stroke();
-    vx.beginPath(); vx.moveTo(tx + ux * 4 * u, ty + uy * 4 * u); vx.lineTo(tx - uy * 3.4 * u, ty + ux * 3.4 * u); vx.lineTo(tx + uy * 3.4 * u, ty - ux * 3.4 * u); vx.closePath(); vx.fill();
-    vx.restore();
+    const sc = W / S.size[0], P3 = X => { const q = C.project(pose.R, pose.t, S.K, X); return q[2] > 0 ? [q[0] * sc, q[1] * sc] : null; };
+    const rr = Math.max(70, Math.min(150, 0.3 * pose.dist)) * cardScale(), dAz = ((g.nxt.az - pose.azim + 540) % 360) - 180, dEl = g.nxt.el - pose.elev;
+    const phase = (performance.now() / 900) % 1;
+    const path = (pts, col) => {
+      const q = pts.map(P3).filter(Boolean); if (q.length < 2) return;
+      vx.save(); vx.lineCap = 'round'; vx.lineJoin = 'round';
+      vx.strokeStyle = 'rgba(0,0,0,.45)'; vx.lineWidth = 2.6 * u; vx.beginPath(); q.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke();
+      vx.strokeStyle = col; vx.globalAlpha = .55; vx.lineWidth = 1.3 * u; vx.setLineDash([2 * u, 2 * u]); vx.beginPath(); q.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke(); vx.setLineDash([]); vx.globalAlpha = 1;
+      // cumulative length for moving chevrons
+      const L = [0]; for (let i = 1; i < q.length; i++) L.push(L[i - 1] + Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]));
+      const tot = L[L.length - 1]; if (tot < 4 * u) { vx.restore(); return; }
+      const at = d => { let i = 1; while (i < L.length - 1 && L[i] < d) i++; const f = (d - L[i - 1]) / Math.max(1e-6, L[i] - L[i - 1]); return [q[i - 1][0] + f * (q[i][0] - q[i - 1][0]), q[i - 1][1] + f * (q[i][1] - q[i - 1][1]), Math.atan2(q[i][1] - q[i - 1][1], q[i][0] - q[i - 1][0])]; };
+      const chev = (x, y, a, sz, alpha) => { vx.save(); vx.translate(x, y); vx.rotate(a); vx.globalAlpha = alpha; vx.fillStyle = col; vx.strokeStyle = 'rgba(0,0,0,.5)'; vx.lineWidth = .5 * u;
+        vx.beginPath(); vx.moveTo(sz, 0); vx.lineTo(-sz * .7, -sz * .8); vx.lineTo(-sz * .25, 0); vx.lineTo(-sz * .7, sz * .8); vx.closePath(); vx.fill(); vx.stroke(); vx.restore(); };
+      for (let k = 0; k < 3; k++) { const f = (phase + k / 3) % 1, [x, y, a] = at(f * tot); chev(x, y, a, 3.2 * u, Math.sin(Math.PI * f)); }
+      const [ex, ey, ea] = at(tot); chev(ex, ey, ea, 4.4 * u, 1);
+      vx.restore();
+    };
+    { const ring = []; for (let k = 0; k <= 48; k++) { const q = P3([rr * Math.cos(k * Math.PI / 24), rr * Math.sin(k * Math.PI / 24), 0]); if (q) ring.push(q); }
+      vx.save(); vx.strokeStyle = 'rgba(255,255,255,.35)'; vx.lineWidth = .6 * u; vx.beginPath(); ring.forEach((p, i) => i ? vx.lineTo(...p) : vx.moveTo(...p)); vx.stroke(); vx.restore(); }
+    if (Math.abs(dAz) > 6 && g.nxt.el < 70) { // orbit: from the point under the phone to the target azimuth, on the table
+      const pts = []; for (let k = 0; k <= 24; k++) { const a = (pose.azim + dAz * k / 24) * Math.PI / 180; pts.push([rr * Math.cos(a), rr * Math.sin(a), 0]); }
+      path(pts, '#ff4f00');
+    }
+    if (Math.abs(dEl) > 6) { // meridian over the card in the phone's own azimuth
+      const a = pose.azim * Math.PI / 180, rm = 0.8 * rr, pts = [];
+      for (let k = 0; k <= 20; k++) { const e = (pose.elev + dEl * k / 20) * Math.PI / 180; pts.push([rm * Math.cos(e) * Math.cos(a), rm * Math.cos(e) * Math.sin(a), rm * Math.sin(e)]); }
+      path(pts, '#ffd400');
+    }
   }
   // mini dome map, bottom-right
   const r = 15 * u, mx = W - r - 3 * u, my = H - r - 9 * u, rOf = el => r * (90 - el) / 90;

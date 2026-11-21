@@ -318,6 +318,10 @@
       masks.push(m); vw.m = m;
       await new Promise(r => setTimeout(r, 0));
     }
+    // 3b) drop views that disagree with the others (bad pose or failed cut): the coarse object should land in their mask
+    const agree = views.map(vw => { let n = 0, inn = 0; for (let k = 0; k < pts3.length; k += 3) { const q = Core.project(vw.pose.R, vw.pose.t, vw.Kk, pts3[k]); const u = q[0] | 0, v = q[1] | 0; if (q[2] <= 0 || u < 0 || v < 0 || u >= vw.w || v >= vw.h) continue; n++; if (vw.m[v * vw.w + u]) inn++; } return n ? inn / n : 0; });
+    const goodViews = views.filter((vw, j) => agree[j] >= 0.6), dropped = views.length - goodViews.length;
+    if (goodViews.length >= 4) { views.length = 0; goodViews.forEach(v => views.push(v)); }
     // 4) fine carve in the object's box
     onStatus && onStatus('Térfogat: finom faragás');
     const span = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0, bb.z1);
@@ -338,7 +342,7 @@
     return {
       volume: vox.length * step ** 3 / 1000, volumeLoose: voxL.length * step ** 3 / 1000, voxelMm: step, points: pts, footprint: { ctr, rad: rmax + step / 2 }, heightMm: zmax + step / 2,
       masks: masks.map((m, i) => ({ w: imgs[i].w, h: imgs[i].h, k: imgs[i].k, data: m })), seedIdx: best, seedCrop: cropAround(imgs[best], masks[best]),
-      candidates: comps.length
+      candidates: comps.length, droppedViews: dropped
     };
   }
   function dilate(m, w, h, r) { const inv = new Uint8Array(m.length); for (let i = 0; i < m.length; i++) inv[i] = m[i] ? 0 : 1; const e = erode(inv, w, h, r); const o = new Uint8Array(m.length); for (let i = 0; i < m.length; i++) o[i] = e[i] ? 0 : 1; return o; }
